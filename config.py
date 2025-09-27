@@ -17,3 +17,6 @@ QUEUE_ENABLED = False
 
 # PostgreSQL Database URL
 DATABASE_URL = "postgresql://user:password@host:port/database"
+
+# Auto-delete delay for sent files in minutes. Set to 0 to disable.
+AUTO_DELETE_DELAY = 0

@@ -7,6 +7,7 @@ import yt_dlp
 import spotipy
 import asyncio
 import db
+from datetime import timedelta
 from spotipy.oauth2 import SpotifyClientCredentials
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatMemberStatus
@@ -27,6 +28,17 @@ spotify = spotipy.Spotify(
 
 # Conversation states for broadcast
 BROADCAST_MESSAGE, BROADCAST_CONFIRM = range(2)
+
+# --- Job Queue Callbacks ---
+async def delete_message_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Deletes a message specified in the job context."""
+    job = context.job
+    try:
+        await context.bot.delete_message(chat_id=job.chat_id, message_id=job.data['message_id'])
+        logger.info(f"Auto-deleted message {job.data['message_id']} in chat {job.chat_id}")
+    except Exception as e:
+        logger.error(f"Failed to delete message {job.data['message_id']} in chat {job.chat_id}: {e}")
+
 
 # --- Queue System ---
 download_queue = asyncio.Queue()
@@ -89,6 +101,27 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     user_count = await db.get_users_count()
     await update.message.reply_text(f"Total users in the database: {user_count}")
+
+async def set_delay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sets the auto-delete delay for sent files."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+
+    try:
+        delay = int(context.args[0])
+        if delay < 0:
+            await update.message.reply_text("Please provide a non-negative number for the delay in minutes.")
+            return
+
+        context.bot_data['auto_delete_delay'] = delay
+        if delay == 0:
+            await update.message.reply_text("Auto-deletion disabled.")
+        else:
+            await update.message.reply_text(f"Auto-delete delay set to {delay} minutes.")
+
+    except (IndexError, ValueError):
+        await update.message.reply_text("Usage: /setdelay <minutes>\nUse 0 to disable auto-deletion.")
 
 async def toggle_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Command to toggle the download queue."""
@@ -322,7 +355,7 @@ async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, vi
         await update.message.reply_text("You must subscribe to our channel to get the song.", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def download_and_send_song(update: Update, context: ContextTypes.DEFAULT_TYPE, info: dict, message):
-    """Downloads a song using yt-dlp and sends it to the user."""
+    """Downloads a song using yt-dlp, sends it, and schedules its deletion if enabled."""
     chat_id = message.chat_id
     download_path = os.path.join('downloads', str(chat_id))
     os.makedirs(download_path, exist_ok=True)
@@ -360,10 +393,24 @@ async def download_and_send_song(update: Update, context: ContextTypes.DEFAULT_T
             if album:
                 caption += f"\n💿 **{album}**"
 
+            delay = context.bot_data.get('auto_delete_delay', config.AUTO_DELETE_DELAY)
+            if delay > 0:
+                caption += f"\n\n⚠️ *This file will be deleted in {delay} minutes.*"
+
             with open(downloaded_file, 'rb') as audio_file:
-                await context.bot.send_audio(
+                sent_message = await context.bot.send_audio(
                     chat_id=chat_id, audio=audio_file, caption=caption,
                     title=title, performer=artist, duration=duration, parse_mode=ParseMode.MARKDOWN
+                )
+
+            # Schedule auto-deletion if enabled
+            if delay > 0:
+                context.job_queue.run_once(
+                    delete_message_job,
+                    when=timedelta(minutes=delay),
+                    data={'message_id': sent_message.message_id},
+                    chat_id=chat_id,
+                    name=f"delete_{chat_id}_{sent_message.message_id}"
                 )
 
             os.remove(downloaded_file)
@@ -386,6 +433,7 @@ async def main() -> None:
 
     application.bot_data.setdefault('upload_mode', config.UPLOAD_MODE)
     application.bot_data.setdefault('queue_enabled', config.QUEUE_ENABLED)
+    application.bot_data.setdefault('auto_delete_delay', config.AUTO_DELETE_DELAY)
 
     # Start the queue worker
     asyncio.create_task(queue_worker(application))
@@ -401,6 +449,7 @@ async def main() -> None:
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("setdelay", set_delay_command))
     application.add_handler(CommandHandler("uploadmode", upload_mode_command))
     application.add_handler(CommandHandler("togglequeue", toggle_queue_command))
     application.add_handler(broadcast_handler)
