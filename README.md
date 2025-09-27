@@ -47,7 +47,7 @@ You can deploy this bot to [Choreo](https://console.choreo.dev/) for a managed d
 **Steps:**
 1.  **Fork this Repository** to your GitHub account.
 2.  **Create a New Project** in Choreo and connect your GitHub account.
-3.  **Select "Bot"** as the component type and provide your forked repository URL.
+3.  **Select the Repository**: Choreo will automatically detect the `component.yaml` file and configure the bot as a "Bot" component with the correct health check endpoint.
 4.  **Configure Environment Variables**: In the Choreo console, go to "Deploy" -> "Configure & Deploy". You will need to add the following environment variables:
     -   `BOT_TOKEN`
     -   `ALLOWED_GROUP_ID`
@@ -57,7 +57,7 @@ You can deploy this bot to [Choreo](https://console.choreo.dev/) for a managed d
     -   `SPOTIPY_CLIENT_SECRET`
     -   `BOT_USERNAME`
     -   `DATABASE_URL` (You can get this from a managed database provider or Choreo's marketplace).
-5.  **Deploy**: Click "Deploy". Choreo will build and deploy the bot. The health check endpoint at `/healthz` will be automatically used.
+5.  **Deploy**: Click "Deploy". Choreo will build and deploy the bot using the predefined settings.
 
 ---
 
