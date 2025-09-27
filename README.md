@@ -7,56 +7,62 @@ This is a powerful Telegram bot for processing media from various sources, desig
 - **Process Media from Links**: Handles media requests from various links and by name.
 - **Interactive Admin Panel**: A user-friendly, inline keyboard-based panel for managing all bot settings.
 - **Group Restriction**: The bot is designed to work only in one allowed group.
-- **Two Upload Modes**:
-    1.  **Direct Mode**: The bot sends the media file directly to the group.
-    2.  **Info Mode**: The bot sends a message with media details and a "Get Media" button, which redirects the user to the bot's PM to receive the file.
-- **Force Subscription**: Users must be subscribed to a designated channel to receive files.
-- **Persistent Settings**: All admin configurations are saved to the database and persist across bot restarts.
-- **PostgreSQL Integration**: Uses a PostgreSQL database to efficiently manage user data and settings.
+- **Persistent Settings**: All admin configurations are saved to a PostgreSQL database and persist across bot restarts.
 - **Auto-Deletion of Files**: Automatically deletes sent media files after a configurable amount of time.
-- **Admin Features via `/panel`**:
-    - **Broadcast System**: Admins can broadcast any message to all users or the main group.
-    - **Switchable Upload Modes**: Admins can toggle between "direct" and "info" upload modes.
-    - **Queue System**: Admins can enable or disable a processing queue to manage high traffic.
-    - **User Stats**: Admins can view the total number of users in the database.
-    - **Configurable Auto-Delete**: Admins can set the auto-delete delay for sent files.
-- **High-Quality Audio**: Processes the best available audio quality.
-- **Rich Captions**: Uploaded files include detailed captions with title, artist, and album information.
+- **Docker Support**: Comes with `Dockerfile` and `docker-compose.yml` for easy, one-command deployment.
 
-## Setup and Installation
+## Deployment
 
-### 1. Prerequisites
+There are two ways to deploy this bot: using Docker (recommended) or running it manually.
 
+### 1. Deploy with Docker (Recommended)
+
+This is the easiest way to get the bot running, as it automatically handles the database and all dependencies, including `ffmpeg`.
+
+**Prerequisites:**
+- [Docker](https://docs.docker.com/get-docker/)
+- [Docker Compose](https://docs.docker.com/compose/install/)
+
+**Steps:**
+1.  **Clone the Repository:**
+    ```bash
+    git clone <repository-url>
+    cd <repository-directory>
+    ```
+2.  **Configure the Bot:**
+    -   Open the `config.py` file and fill in your bot's details (`BOT_TOKEN`, `ALLOWED_GROUP_ID`, `ADMINS`, etc.).
+    -   **Do not** change the `DATABASE_URL` in this file. Docker Compose will handle it.
+3.  **Run with Docker Compose:**
+    ```bash
+    docker-compose up --build -d
+    ```
+The bot and its database are now running in the background. To view logs, use `docker-compose logs -f`. To stop, use `docker-compose down`.
+
+---
+
+### 2. Manual Installation
+
+**Prerequisites:**
 - Python 3.8 or higher
 - `ffmpeg` installed on your system.
-- A PostgreSQL database.
+- A running PostgreSQL database.
 
-### 2. Clone the Repository
-
-```bash
-git clone <repository-url>
-cd <repository-directory>
-```
-
-### 3. Install Dependencies
-
-Install the required Python libraries using pip:
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Configuration
-
-Fill in your details in the `config.py` file. You will need to obtain API keys and tokens from their respective platforms.
-
-### 5. Running the Bot
-
-Once everything is configured, you can start the bot with the following command:
-
-```bash
-python bot.py
-```
+**Steps:**
+1.  **Clone the Repository:**
+    ```bash
+    git clone <repository-url>
+    cd <repository-directory>
+    ```
+2.  **Install Dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
+3.  **Configure the Bot:**
+    -   Open the `config.py` file and fill in all your details, including the `DATABASE_URL` for your PostgreSQL database.
+4.  **Running the Bot:**
+    ```bash
+    python bot.py
+    ```
 
 ## Admin Commands
 

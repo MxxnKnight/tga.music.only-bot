@@ -13,17 +13,22 @@ DEFAULT_SETTINGS = {
     "auto_delete_delay": config.AUTO_DELETE_DELAY,
 }
 
+import os
+
 async def initialize_db():
     """
     Initializes the database connection pool and creates tables if they don't exist.
     Also ensures default settings are in the database.
     """
     global pool
-    if not config.DATABASE_URL:
-        logger.error("DATABASE_URL not set in config.py. Database features will be disabled.")
+    # Prioritize DATABASE_URL from environment variables (for Docker), then fall back to config file.
+    database_url = os.environ.get('DATABASE_URL') or config.DATABASE_URL
+
+    if not database_url:
+        logger.error("DATABASE_URL not set in environment or config.py. Database features will be disabled.")
         return
     try:
-        pool = await asyncpg.create_pool(config.DATABASE_URL)
+        pool = await asyncpg.create_pool(dsn=database_url)
         async with pool.acquire() as connection:
             await connection.execute('''
                 CREATE TABLE IF NOT EXISTS users (
