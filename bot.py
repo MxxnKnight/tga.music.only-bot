@@ -76,14 +76,14 @@ async def delete_message_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 # --- Queue System ---
 download_queue = asyncio.Queue()
 
-async def queue_worker(context: ContextTypes.DEFAULT_TYPE):
+async def queue_worker(application: Application):
     """Worker that processes the download queue."""
     while True:
         item = await download_queue.get()
         update, info, message = item['update'], item['info'], item['message']
 
         try:
-            await download_and_send_song(update, context, info, message)
+            await download_and_send_song(update, application, info, message)
         except Exception as e:
             logger.error(f"Error processing item from queue: {e}")
             await message.edit_text("Sorry, an error occurred while processing your request from the queue.")
@@ -341,7 +341,7 @@ async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYP
                         await download_queue.put({'update': update, 'info': info, 'message': message})
                         await message.edit_text(f"Added to queue. There are {download_queue.qsize()} song(s) ahead of you.")
                     else:
-                        await download_and_send_song(update, context, info, message)
+                        await download_and_send_song(update, context.application, info, message)
                 else:
                     keyboard = [[InlineKeyboardButton("Subscribe to Channel", url=f"https://t.me/{config.FORCE_SUB_CHANNEL.replace('@', '')}")], [InlineKeyboardButton("Try Again", callback_data=f"checksub_{video_id}")]]
                     await message.edit_text("You must subscribe to our channel to download songs directly.", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -371,7 +371,7 @@ async def checksub_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 await download_queue.put({'update': update, 'info': info, 'message': query.message})
                 await query.message.edit_text(f"Added to queue. There are {download_queue.qsize()} song(s) ahead of you.")
             else:
-                await download_and_send_song(update, context, info, query.message)
+                await download_and_send_song(update, context.application, info, query.message)
         except Exception as e:
             logger.error(f"Error re-fetching info for checksub: {e}")
             await query.message.edit_text("Sorry, the song request expired or failed.")
@@ -393,7 +393,7 @@ async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, vi
                 await download_queue.put({'update': update, 'info': info, 'message': message})
                 await message.edit_text(f"Added to queue. There are {download_queue.qsize()} song(s) ahead of you.")
             else:
-                await download_and_send_song(update, context, info, message)
+                await download_and_send_song(update, context.application, info, message)
         except Exception as e:
             logger.error(f"Error fetching info for PM song: {e}")
             await message.edit_text("Sorry, the song request expired or failed.")
@@ -401,7 +401,7 @@ async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, vi
         keyboard = [[InlineKeyboardButton("Subscribe to Channel", url=f"https://t.me/{config.FORCE_SUB_CHANNEL.replace('@', '')}")]]
         await update.message.reply_text("You must subscribe to our channel to get the song.", reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def download_and_send_song(update: Update, context: ContextTypes.DEFAULT_TYPE, info: dict, message):
+async def download_and_send_song(update: Update, application: Application, info: dict, message):
     chat_id = message.chat_id
     download_path = os.path.join('downloads', str(chat_id))
     os.makedirs(download_path, exist_ok=True)
@@ -421,12 +421,12 @@ async def download_and_send_song(update: Update, context: ContextTypes.DEFAULT_T
             await message.edit_text("Uploading song...")
             title, artist, duration, album = info.get('title', 'Unknown Title'), info.get('uploader', 'Unknown Artist'), info.get('duration', 0), info.get('album', None)
             caption = f"🎵 **{title}**\n👤 **{artist}**" + (f"\n💿 **{album}**" if album else "")
-            delay = context.bot_data.get('auto_delete_delay')
+            delay = application.bot_data.get('auto_delete_delay')
             if delay > 0: caption += f"\n\n⚠️ *This file will be deleted in {delay} minutes.*"
             with open(downloaded_file, 'rb') as audio_file:
-                sent_message = await context.bot.send_audio(chat_id=chat_id, audio=audio_file, caption=caption, title=title, performer=artist, duration=duration, parse_mode=ParseMode.MARKDOWN)
+                sent_message = await application.bot.send_audio(chat_id=chat_id, audio=audio_file, caption=caption, title=title, performer=artist, duration=duration, parse_mode=ParseMode.MARKDOWN)
             if delay > 0:
-                context.job_queue.run_once(delete_message_job, when=timedelta(minutes=delay), data={'message_id': sent_message.message_id}, chat_id=chat_id, name=f"delete_{chat_id}_{sent_message.message_id}")
+                application.job_queue.run_once(delete_message_job, when=timedelta(minutes=delay), data={'message_id': sent_message.message_id}, chat_id=chat_id, name=f"delete_{chat_id}_{sent_message.message_id}")
             os.remove(downloaded_file)
             await message.delete()
     except Exception as e:
