@@ -5,18 +5,20 @@ This is a powerful Telegram bot for downloading music from various sources, desi
 ## Features
 
 - **Download from Multiple Sources**: Download music by name or from YouTube, YouTube Music, Spotify, and Saavn links.
+- **Interactive Admin Panel**: A user-friendly, inline keyboard-based panel for managing all bot settings.
 - **Group Restriction**: The bot is designed to work only in one allowed group.
 - **PM Download Restriction**: Users cannot download music directly in the bot's private chat, except through a specific "Get Song" flow.
 - **Two Upload Modes**:
     1.  **Direct Mode**: The bot sends the audio file directly to the group.
     2.  **Info Mode**: The bot sends a message with song details and a "Get Song" button, which redirects the user to the bot's PM to receive the file.
 - **Force Subscription**: Users must be subscribed to a designated channel to download music.
+- **Persistent Settings**: All admin configurations are saved to a `settings.json` file and persist across bot restarts.
 - **PostgreSQL Integration**: Uses a PostgreSQL database to efficiently manage user data for broadcasts and stats.
 - **Auto-Deletion of Files**: Automatically deletes sent music files after a configurable amount of time to keep the chat clean.
-- **Admin Features**:
-    - **Broadcast System**: Admins can broadcast messages to all users who have interacted with the bot or to the main group.
+- **Admin Features via `/panel`**:
+    - **Broadcast System**: Admins can broadcast any message to all users or the main group.
     - **Switchable Upload Modes**: Admins can toggle between "direct" and "info" upload modes.
-    - **Queue System**: Admins can enable or disable a download queue to manage high traffic and prevent spam.
+    - **Queue System**: Admins can enable or disable a download queue to manage high traffic.
     - **User Stats**: Admins can view the total number of users in the database.
     - **Configurable Auto-Delete**: Admins can set the auto-delete delay for sent files.
 - **High-Quality Audio**: Downloads the best available audio quality (up to 320kbps).
@@ -95,20 +97,18 @@ python bot.py
 
 ## Admin Commands
 
--   `/broadcast` (reply to a message): Initiates the broadcast process.
--   `/uploadmode`: Toggles the song upload mode between `direct` and `info`.
--   `/togglequeue`: Enables or disables the download queue.
--   `/stats`: Shows the total number of users in the database.
--   `/setdelay <minutes>`: Sets the auto-delete delay for sent files. Use 0 to disable.
+-   `/panel`: Opens the interactive admin panel to manage all bot settings.
+-   `/cancel`: Cancels any ongoing admin action within the panel.
 
 ## How It Works
 
 1.  **Song Request**: A user sends a song name or a supported link in the allowed group.
-2.  **Link Processing**: The bot detects the type of link (YouTube, Spotify, Saavn) and extracts the song information. For Spotify and Saavn, it searches for the song on YouTube.
-3.  **Subscription Check**: The bot checks if the user is subscribed to the `FORCE_SUB_CHANNEL`.
-4.  **Upload Mode Logic**:
+2.  **Admin Management**: Admins can use the `/panel` command to access a menu-driven interface to configure the bot's settings. All settings are saved and persist after a restart.
+3.  **Link Processing**: The bot detects the type of link (YouTube, Spotify, Saavn) and extracts the song information. For Spotify and Saavn, it searches for the song on YouTube.
+4.  **Subscription Check**: The bot checks if the user is subscribed to the `FORCE_SUB_CHANNEL`.
+5.  **Upload Mode Logic**:
     -   If in **`direct` mode** and the user is subscribed, the bot downloads and sends the song directly to the group.
     -   If in **`info` mode**, the bot sends a message with a "Get Song" button. Clicking this button takes the user to the bot's PM, where they receive the song after another subscription check.
-5.  **Queue System**: If the queue is enabled, song requests are added to a queue and processed one by one to avoid overloading the bot.
-6.  **User Database**: The bot stores the user ID of anyone who starts a private chat with it in the PostgreSQL database. This is used for the broadcast feature and user statistics.
-7.  **Auto-Deletion**: If the auto-delete delay is set to a value greater than 0, the bot will automatically delete the sent music file after the specified number of minutes. A warning is included in the song's caption.
+6.  **Queue System**: If the queue is enabled, song requests are added to a queue and processed one by one to avoid overloading the bot.
+7.  **User Database**: The bot stores the user ID of anyone who starts a private chat with it in the PostgreSQL database. This is used for the broadcast feature and user statistics.
+8.  **Auto-Deletion**: If the auto-delete delay is set to a value greater than 0, the bot will automatically delete the sent music file after the specified number of minutes. A warning is included in the song's caption.
