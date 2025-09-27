@@ -8,7 +8,6 @@ import spotipy
 import asyncio
 import db
 import admin_panel
-import settings
 from datetime import timedelta
 from spotipy.oauth2 import SpotifyClientCredentials
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -103,7 +102,6 @@ async def panel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     text, keyboard = admin_panel.get_main_panel(context)
 
-    # If the command is triggered, send a new panel. If it's from a callback, edit the existing one.
     if update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
     else:
@@ -111,7 +109,7 @@ async def panel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             try:
                 await context.bot.delete_message(update.effective_chat.id, context.user_data['panel_message_id'])
             except Exception:
-                pass # Ignore if message is already deleted
+                pass
 
         message = await update.message.reply_text(text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
         context.user_data['panel_message_id'] = message.message_id
@@ -124,26 +122,28 @@ async def admin_panel_actions(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     data = query.data
 
-    async def save_and_update_panel(panel_function):
-        settings.save_settings(context.bot_data)
+    async def update_and_show_panel(panel_function):
         text, keyboard = panel_function(context)
         await query.edit_message_text(text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
 
     if data == "admin_back_to_main":
-        text, keyboard = admin_panel.get_main_panel(context)
-        await query.edit_message_text(text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
+        await update_and_show_panel(admin_panel.get_main_panel)
         return SELECTING_ACTION
 
     elif data == "admin_upload_mode":
-        await save_and_update_panel(admin_panel.get_upload_mode_panel)
+        await update_and_show_panel(admin_panel.get_upload_mode_panel)
     elif data.startswith("admin_set_upload_"):
-        context.bot_data['upload_mode'] = data.split('_')[-1]
-        await save_and_update_panel(admin_panel.get_upload_mode_panel)
+        mode = data.split('_')[-1]
+        context.bot_data['upload_mode'] = mode
+        await db.set_setting('upload_mode', mode)
+        await update_and_show_panel(admin_panel.get_upload_mode_panel)
     elif data == "admin_queue":
-        await save_and_update_panel(admin_panel.get_queue_panel)
+        await update_and_show_panel(admin_panel.get_queue_panel)
     elif data.startswith("admin_set_queue_"):
-        context.bot_data['queue_enabled'] = data.split('_')[-1] == 'enabled'
-        await save_and_update_panel(admin_panel.get_queue_panel)
+        status = data.split('_')[-1] == 'enabled'
+        context.bot_data['queue_enabled'] = status
+        await db.set_setting('queue_enabled', status)
+        await update_and_show_panel(admin_panel.get_queue_panel)
     elif data == "admin_stats":
         user_count = await db.get_users_count()
         await context.bot.answer_callback_query(query.id, text=f"📊 Total users in database: {user_count}", show_alert=True)
@@ -170,19 +170,28 @@ async def set_delay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return SETTING_DELAY
 
         context.bot_data['auto_delete_delay'] = delay
-        settings.save_settings(context.bot_data)
+        await db.set_setting('auto_delete_delay', delay)
 
         await update.message.reply_text(f"✅ Auto-delete delay set to {delay} minutes." if delay > 0 else "✅ Auto-deletion disabled.", quote=True)
     except (ValueError):
         await update.message.reply_text("Invalid number. Please send a valid number of minutes.", quote=True)
         return SETTING_DELAY
 
-    await panel_command(update, context)
+    # Return to main panel
+    text, keyboard = admin_panel.get_main_panel(context)
+    await context.bot.edit_message_text(
+        text=text,
+        chat_id=update.effective_chat.id,
+        message_id=context.user_data['panel_message_id'],
+        reply_markup=keyboard,
+        parse_mode=ParseMode.MARKDOWN
+    )
     return SELECTING_ACTION
 
 async def broadcast_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles the message to be broadcasted."""
-    context.user_data['broadcast_message'] = update.message
+    context.user_data['broadcast_message_id'] = update.message.message_id
+    context.user_data['broadcast_chat_id'] = update.message.chat_id
 
     keyboard = [
         [InlineKeyboardButton("To All Users", callback_data="broadcast_users")],
@@ -205,8 +214,9 @@ async def broadcast_confirmation_handler(update: Update, context: ContextTypes.D
         await panel_command(update, context)
         return SELECTING_ACTION
 
-    broadcast_message = context.user_data.get('broadcast_message')
-    if not broadcast_message:
+    message_id = context.user_data.get('broadcast_message_id')
+    chat_id = context.user_data.get('broadcast_chat_id')
+    if not message_id or not chat_id:
         await query.edit_message_text("Error: Could not find the message. Returning to panel.")
         await asyncio.sleep(2)
         await panel_command(update, context)
@@ -223,11 +233,7 @@ async def broadcast_confirmation_handler(update: Update, context: ContextTypes.D
     success_count, fail_count = 0, 0
     for target_chat_id in target_chats:
         try:
-            await context.bot.copy_message(
-                chat_id=target_chat_id,
-                from_chat_id=broadcast_message.chat_id,
-                message_id=broadcast_message.message_id
-            )
+            await context.bot.copy_message(chat_id=target_chat_id, from_chat_id=chat_id, message_id=message_id)
             success_count += 1
             await asyncio.sleep(0.1)
         except Exception as e:
@@ -256,7 +262,7 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context.user_data.clear()
     return ConversationHandler.END
 
-# --- Song Handling Logic (remains unchanged) ---
+# --- Song Handling Logic ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if update.effective_chat.type == 'private': await db.add_user(user_id)
@@ -273,30 +279,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             try:
                 track = spotify.track(message_text)
                 query = f"{track['name']} {track['artists'][0]['name']}"
-                await message.edit_text(f"Found on Spotify: '{query}'. Now searching on YouTube...")
+                await message.edit_text("🎧 Downloading from Spotify...")
             except Exception as e:
                 logger.error(f"Spotify error: {e}")
                 await message.edit_text("Could not process the Spotify link.")
                 return
         elif "jiosaavn.com" in message_text:
+            await message.edit_text("🎧 Downloading from Saavn...")
             song_name_match = re.search(r'/song/[^/]+/([^/?]+)', message_text)
             if song_name_match:
                 query = song_name_match.group(1).replace('-', ' ')
-                await message.edit_text(f"Found on Saavn: '{query}'. Now searching on YouTube...")
             else:
                 await message.edit_text("Could not extract info from Saavn link.")
                 return
     await process_song_request(update, context, query, message)
 
 async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, message):
-    await message.edit_text(f"Searching for '{query}'...")
     ydl_opts = {'format': 'bestaudio/best', 'noplaylist': True, 'default_search': 'ytsearch1', 'extract_flat': 'in_playlist'}
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(query, download=False)
+            info = ydl.extract_info(f"ytsearch:{query}", download=False)
             if 'entries' in info and info['entries']: info = info['entries'][0]
+
             video_id = info['id']
-            context.bot_data[video_id] = info
+            # Don't cache song info in bot_data anymore. Pass it directly.
+
             if context.bot_data.get('upload_mode') == 'direct':
                 if await is_user_subscribed(update.effective_user.id, context):
                     if context.bot_data.get('queue_enabled'):
@@ -322,31 +329,43 @@ async def checksub_callback_handler(update: Update, context: ContextTypes.DEFAUL
     video_id = query.data.split("_", 1)[1]
     if await is_user_subscribed(query.from_user.id, context):
         await query.message.edit_text("Thank you for subscribing! Processing request...")
-        info = context.bot_data.get(video_id)
-        if info:
+
+        # Re-fetch info since it's not cached
+        ydl_opts = {'format': 'bestaudio/best', 'noplaylist': True}
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_id, download=False)
+
             if context.bot_data.get('queue_enabled'):
                 await download_queue.put({'update': update, 'info': info, 'message': query.message})
                 await query.message.edit_text(f"Added to queue. There are {download_queue.qsize()} song(s) ahead of you.")
             else:
                 await download_and_send_song(update, context, info, query.message)
-        else:
-            await query.message.edit_text("Sorry, the song request expired.")
+        except Exception as e:
+            logger.error(f"Error re-fetching info for checksub: {e}")
+            await query.message.edit_text("Sorry, the song request expired or failed.")
     else:
         await query.message.edit_text("You are still not subscribed. Please join the channel and try again.")
 
 async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, video_id: str):
     await db.add_user(update.effective_user.id)
-    info = context.bot_data.get(video_id)
-    if not info:
-        await update.message.reply_text("This song link has expired or is invalid.")
-        return
+
     if await is_user_subscribed(update.effective_user.id, context):
         message = await update.message.reply_text("Processing your request...")
-        if context.bot_data.get('queue_enabled'):
-            await download_queue.put({'update': update, 'info': info, 'message': message})
-            await message.edit_text(f"Added to queue. There are {download_queue.qsize()} song(s) ahead of you.")
-        else:
-            await download_and_send_song(update, context, info, message)
+
+        ydl_opts = {'format': 'bestaudio/best', 'noplaylist': True}
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_id, download=False)
+
+            if context.bot_data.get('queue_enabled'):
+                await download_queue.put({'update': update, 'info': info, 'message': message})
+                await message.edit_text(f"Added to queue. There are {download_queue.qsize()} song(s) ahead of you.")
+            else:
+                await download_and_send_song(update, context, info, message)
+        except Exception as e:
+            logger.error(f"Error fetching info for PM song: {e}")
+            await message.edit_text("Sorry, the song request expired or failed.")
     else:
         keyboard = [[InlineKeyboardButton("Subscribe to Channel", url=f"https://t.me/{config.FORCE_SUB_CHANNEL.replace('@', '')}")]]
         await update.message.reply_text("You must subscribe to our channel to get the song.", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -391,7 +410,7 @@ async def download_and_send_song(update: Update, context: ContextTypes.DEFAULT_T
 async def main() -> None:
     """Start the bot."""
     await db.initialize_db()
-    loaded_settings = settings.load_settings()
+    loaded_settings = await db.load_all_settings()
     application = Application.builder().token(config.BOT_TOKEN).build()
     application.bot_data.update(loaded_settings)
     asyncio.create_task(queue_worker(application))
