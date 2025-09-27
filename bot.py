@@ -13,6 +13,8 @@ from spotipy.oauth2 import SpotifyClientCredentials
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatMemberStatus
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
+from flask import Flask
+import threading
 
 # Enable logging
 logging.basicConfig(
@@ -26,6 +28,21 @@ spotify = spotipy.Spotify(
         client_id=config.SPOTIPY_CLIENT_ID, client_secret=config.SPOTIPY_CLIENT_SECRET
     )
 )
+
+# --- Health Check Server ---
+flask_app = Flask(__name__)
+
+@flask_app.route('/healthz')
+def health_check():
+    """Provides a simple health check endpoint."""
+    return "OK", 200
+
+def run_flask_app():
+    """Runs the Flask app in a separate thread."""
+    port = int(os.environ.get('PORT', 8080))
+    logger.info(f"Starting Flask health check server on port {port}...")
+    flask_app.run(host='0.0.0.0', port=port)
+
 
 # Conversation states for Admin Panel
 SELECTING_ACTION, SETTING_DELAY, BROADCASTING_MESSAGE, BROADCASTING_CONFIRM = range(4)
@@ -408,11 +425,17 @@ async def download_and_send_song(update: Update, context: ContextTypes.DEFAULT_T
             os.rmdir(download_path)
 
 async def main() -> None:
-    """Start the bot."""
+    """Start the bot and the health check server."""
     await db.initialize_db()
     loaded_settings = await db.load_all_settings()
     application = Application.builder().token(config.BOT_TOKEN).build()
     application.bot_data.update(loaded_settings)
+
+    # Start health check server
+    flask_thread = threading.Thread(target=run_flask_app)
+    flask_thread.daemon = True
+    flask_thread.start()
+
     asyncio.create_task(queue_worker(application))
 
     admin_conv_handler = ConversationHandler(
