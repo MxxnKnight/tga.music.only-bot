@@ -11,10 +11,12 @@ This is a powerful Telegram bot for downloading music from various sources, desi
     1.  **Direct Mode**: The bot sends the audio file directly to the group.
     2.  **Info Mode**: The bot sends a message with song details and a "Get Song" button, which redirects the user to the bot's PM to receive the file.
 - **Force Subscription**: Users must be subscribed to a designated channel to download music.
+- **PostgreSQL Integration**: Uses a PostgreSQL database to efficiently manage user data for broadcasts and stats.
 - **Admin Features**:
     - **Broadcast System**: Admins can broadcast messages to all users who have interacted with the bot or to the main group.
     - **Switchable Upload Modes**: Admins can toggle between "direct" and "info" upload modes.
     - **Queue System**: Admins can enable or disable a download queue to manage high traffic and prevent spam.
+    - **User Stats**: Admins can view the total number of users in the database.
 - **High-Quality Audio**: Downloads the best available audio quality (up to 320kbps).
 - **Rich Captions**: Uploaded songs include detailed captions with title, artist, and album information.
 
@@ -24,6 +26,7 @@ This is a powerful Telegram bot for downloading music from various sources, desi
 
 - Python 3.8 or higher
 - `ffmpeg` installed on your system.
+- A PostgreSQL database.
 
 ### 2. Clone the Repository
 
@@ -61,6 +64,9 @@ UPLOAD_MODE = "direct"
 
 # Default queue system status: True or False
 QUEUE_ENABLED = False
+
+# PostgreSQL Database URL
+DATABASE_URL = "postgresql://user:password@host:port/database"
 ```
 
 **How to get the required values:**
@@ -72,6 +78,7 @@ QUEUE_ENABLED = False
 -   **`ADMINS`**: A list of user IDs for those who will have admin privileges on the bot.
 -   **`SPOTIPY_CLIENT_ID`** and **`SPOTIPY_CLIENT_SECRET`**: From the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard/).
 -   **`BOT_USERNAME`**: Your bot's username.
+-   **`DATABASE_URL`**: The connection string for your PostgreSQL database. For example: `postgresql://user:password@localhost:5432/music_bot_db`.
 
 ### 5. Running the Bot
 
@@ -86,6 +93,7 @@ python bot.py
 -   `/broadcast` (reply to a message): Initiates the broadcast process.
 -   `/uploadmode`: Toggles the song upload mode between `direct` and `info`.
 -   `/togglequeue`: Enables or disables the download queue.
+-   `/stats`: Shows the total number of users in the database.
 
 ## How It Works
 
@@ -96,3 +104,4 @@ python bot.py
     -   If in **`direct` mode** and the user is subscribed, the bot downloads and sends the song directly to the group.
     -   If in **`info` mode**, the bot sends a message with a "Get Song" button. Clicking this button takes the user to the bot's PM, where they receive the song after another subscription check.
 5.  **Queue System**: If the queue is enabled, song requests are added to a queue and processed one by one to avoid overloading the bot.
+6.  **User Database**: The bot stores the user ID of anyone who starts a private chat with it in the PostgreSQL database. This is used for the broadcast feature and user statistics.

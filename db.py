@@ -1,22 +1,71 @@
-import json
-import os
+# db.py
+import asyncpg
+import config
+import logging
 
-DB_FILE = 'user_db.json'
+logger = logging.getLogger(__name__)
+pool = None
 
-def initialize_db():
-    if not os.path.exists(DB_FILE):
-        with open(DB_FILE, 'w') as f:
-            json.dump({'users': []}, f)
+async def initialize_db():
+    """
+    Initializes the database connection pool and creates the users table if it doesn't exist.
+    """
+    global pool
+    if not config.DATABASE_URL:
+        logger.error("DATABASE_URL not set in config.py. Database features will be disabled.")
+        return
+    try:
+        pool = await asyncpg.create_pool(config.DATABASE_URL)
+        async with pool.acquire() as connection:
+            await connection.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id BIGINT PRIMARY KEY
+                )
+            ''')
+        logger.info("Database connection pool established and table initialized.")
+    except Exception as e:
+        logger.critical(f"Could not connect to PostgreSQL database: {e}")
+        pool = None
 
-def add_user(user_id: int):
-    with open(DB_FILE, 'r+') as f:
-        db = json.load(f)
-        if user_id not in db['users']:
-            db['users'].append(user_id)
-            f.seek(0)
-            json.dump(db, f)
+async def add_user(user_id: int):
+    """
+    Adds a new user to the database if they don't already exist.
+    """
+    if not pool:
+        return
+    try:
+        async with pool.acquire() as connection:
+            await connection.execute(
+                "INSERT INTO users (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
+                user_id
+            )
+    except Exception as e:
+        logger.error(f"Error adding user {user_id} to database: {e}")
 
-def get_all_users() -> list:
-    with open(DB_FILE, 'r') as f:
-        db = json.load(f)
-        return db.get('users', [])
+async def get_all_users() -> list[int]:
+    """
+    Retrieves a list of all user IDs from the database.
+    """
+    if not pool:
+        return []
+    try:
+        async with pool.acquire() as connection:
+            records = await connection.fetch("SELECT user_id FROM users")
+            return [record['user_id'] for record in records]
+    except Exception as e:
+        logger.error(f"Error getting all users from database: {e}")
+        return []
+
+async def get_users_count() -> int:
+    """
+    Retrieves the total number of users from the database.
+    """
+    if not pool:
+        return 0
+    try:
+        async with pool.acquire() as connection:
+            count = await connection.fetchval("SELECT COUNT(*) FROM users")
+            return count or 0
+    except Exception as e:
+        logger.error(f"Error getting user count from database: {e}")
+        return 0

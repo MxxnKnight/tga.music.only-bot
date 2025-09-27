@@ -14,3 +14,6 @@ UPLOAD_MODE = "direct"
 
 # Queue system: True or False
 QUEUE_ENABLED = False
+
+# PostgreSQL Database URL
+DATABASE_URL = "postgresql://user:password@host:port/database"

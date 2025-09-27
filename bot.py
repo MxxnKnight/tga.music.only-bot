@@ -68,7 +68,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle the /start command."""
     user_id = update.effective_user.id
     if update.effective_chat.type == 'private':
-        db.add_user(user_id)
+        await db.add_user(user_id)
         args = context.args
         if args and args[0].startswith("get_song_"):
             video_id = args[0].split("_", 2)[2]
@@ -80,6 +80,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text("Hi! I'm ready to download music. Send me a song name or a link.")
         else:
             await update.message.reply_text("This group is not authorized to use this bot.")
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Gets the total number of users from the database."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+
+    user_count = await db.get_users_count()
+    await update.message.reply_text(f"Total users in the database: {user_count}")
 
 async def toggle_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Command to toggle the download queue."""
@@ -154,7 +163,7 @@ async def broadcast_confirmation_handler(update: Update, context: ContextTypes.D
 
     target_chats = []
     if broadcast_type == 'broadcast_users':
-        target_chats = db.get_all_users()
+        target_chats = await db.get_all_users()
     elif broadcast_type == 'broadcast_group':
         target_chats = [config.ALLOWED_GROUP_ID]
 
@@ -168,7 +177,7 @@ async def broadcast_confirmation_handler(update: Update, context: ContextTypes.D
                 message_id=message_id
             )
             success_count += 1
-            await asyncio.sleep(0.1) # Avoid hitting rate limits
+            await asyncio.sleep(0.1)
         except Exception as e:
             fail_count += 1
             logger.error(f"Failed to send broadcast to {target_chat_id}: {e}")
@@ -187,7 +196,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Handle user messages for song requests."""
     user_id = update.effective_user.id
     if update.effective_chat.type == 'private':
-        db.add_user(user_id)
+        await db.add_user(user_id)
 
     if str(update.effective_chat.id) != config.ALLOWED_GROUP_ID and update.effective_chat.type != 'private':
         await update.message.reply_text("This group is not authorized to use this bot.")
@@ -293,7 +302,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, video_id: str):
     """Send the song to the user in PM after checking subscription."""
-    db.add_user(update.effective_user.id)
+    await db.add_user(update.effective_user.id)
     info = context.bot_data.get(video_id)
     if not info:
         await update.message.reply_text("This song link has expired or is invalid.")
@@ -369,9 +378,10 @@ async def download_and_send_song(update: Update, context: ContextTypes.DEFAULT_T
                 for file in os.listdir(download_path): os.remove(os.path.join(download_path, file))
             os.rmdir(download_path)
 
-def main() -> None:
+async def main() -> None:
     """Start the bot."""
-    db.initialize_db()
+    await db.initialize_db()
+
     application = Application.builder().token(config.BOT_TOKEN).build()
 
     application.bot_data.setdefault('upload_mode', config.UPLOAD_MODE)
@@ -390,13 +400,14 @@ def main() -> None:
     )
 
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("uploadmode", upload_mode_command))
     application.add_handler(CommandHandler("togglequeue", toggle_queue_command))
     application.add_handler(broadcast_handler)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(callback_query_handler, pattern='^checksub_.*'))
 
-    application.run_polling()
+    await application.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
