@@ -13,8 +13,7 @@ from spotipy.oauth2 import SpotifyClientCredentials
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatMemberStatus
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
-from flask import Flask
-import threading
+from aiohttp import web
 
 # Enable logging
 logging.basicConfig(
@@ -29,19 +28,34 @@ spotify = spotipy.Spotify(
     )
 )
 
-# --- Health Check Server ---
-flask_app = Flask(__name__)
+# --- Health Check Server (aiohttp) ---
+async def health_check_handler(request: web.Request) -> web.Response:
+    """AIOHTTP handler for the health check endpoint."""
+    return web.Response(text="OK")
 
-@flask_app.route('/healthz')
-def health_check():
-    """Provides a simple health check endpoint."""
-    return "OK", 200
-
-def run_flask_app():
-    """Runs the Flask app in a separate thread."""
+async def start_health_check_server(application: Application) -> None:
+    """Starts the aiohttp web server for health checks."""
     port = int(os.environ.get('PORT', 8080))
-    logger.info(f"Starting Flask health check server on port {port}...")
-    flask_app.run(host='0.0.0.0', port=port)
+    app = web.Application()
+    app.add_routes([web.get('/healthz', health_check_handler)])
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    site = web.TCPSite(runner, host='0.0.0.0', port=port)
+    await site.start()
+
+    logger.info(f"Starting aiohttp health check server on port {port}...")
+    # Store runner and site in bot_data to be accessible for cleanup
+    application.bot_data['aiohttp_runner'] = runner
+    application.bot_data['aiohttp_site'] = site
+
+async def shutdown_health_check_server(application: Application) -> None:
+    """Gracefully shuts down the aiohttp web server."""
+    runner = application.bot_data.get('aiohttp_runner')
+    if runner:
+        logger.info("Shutting down aiohttp health check server...")
+        await runner.cleanup()
 
 
 # Conversation states for Admin Panel
@@ -428,14 +442,20 @@ async def main() -> None:
     """Start the bot and the health check server."""
     await db.initialize_db()
     loaded_settings = await db.load_all_settings()
-    application = Application.builder().token(config.BOT_TOKEN).build()
+
+    # Use post_init and post_shutdown for the health check server
+    application = (
+        Application.builder()
+        .token(config.BOT_TOKEN)
+        .post_init(start_health_check_server)
+        .post_shutdown(shutdown_health_check_server)
+        .build()
+    )
+
     application.bot_data.update(loaded_settings)
 
-    # Start health check server
-    flask_thread = threading.Thread(target=run_flask_app)
-    flask_thread.daemon = True
-    flask_thread.start()
-
+    # The queue worker should be started as a background task
+    # It will be managed by the application's event loop
     asyncio.create_task(queue_worker(application))
 
     admin_conv_handler = ConversationHandler(
@@ -457,6 +477,7 @@ async def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(checksub_callback_handler, pattern='^checksub_.*'))
 
+    # run_polling will now also manage the aiohttp server lifecycle
     await application.run_polling()
 
 if __name__ == "__main__":
