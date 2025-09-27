@@ -1,35 +1,43 @@
 # config.py
 import os
 
-# Helper function to get config from environment variables
-def get_env(name, default):
-    return os.environ.get(name, default)
-
 # --- Required Environment Variables ---
-BOT_TOKEN = get_env("BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
-ALLOWED_GROUP_ID = get_env("ALLOWED_GROUP_ID", "YOUR_ALLOWED_GROUP_ID")
-ADMINS_STRING = get_env("ADMINS", "ADMIN_USER_ID_1,ADMIN_USER_ID_2")
-ADMINS = [admin.strip() for admin in ADMINS_STRING.split(',')]
+# These must be set in the environment, or the bot will fail to start.
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ALLOWED_GROUP_ID = os.getenv("ALLOWED_GROUP_ID")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Admin configuration
+ADMINS_STRING = os.getenv("ADMINS")
+ADMINS = [admin.strip() for admin in ADMINS_STRING.split(',')] if ADMINS_STRING else []
 
 # --- Optional Environment Variables ---
-FORCE_SUB_CHANNEL = get_env("FORCE_SUB_CHANNEL", None) # Must be like @username
-SPOTIPY_CLIENT_ID = get_env("SPOTIPY_CLIENT_ID", None)
-SPOTIPY_CLIENT_SECRET = get_env("SPOTIPY_CLIENT_SECRET", None)
-BOT_USERNAME = get_env("BOT_USERNAME", "YOUR_BOT_USERNAME") # Without @
+FORCE_SUB_CHANNEL = os.getenv("FORCE_SUB_CHANNEL") # Must be like @username
+SPOTIPY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
+SPOTIPY_CLIENT_SECRET = os.getenv("SPOTIPY_CLIENT_SECRET")
+BOT_USERNAME = os.getenv("BOT_USERNAME") # Without @
 
-# --- Database URL (Important for persistence) ---
-DATABASE_URL = get_env("DATABASE_URL", "postgresql://user:password@host:port/database")
-
-# --- Bot Settings (with defaults) ---
-UPLOAD_MODE = get_env("UPLOAD_MODE", "direct") # 'direct' or 'info'
+# --- Bot Settings (with safe defaults) ---
+UPLOAD_MODE = os.getenv("UPLOAD_MODE", "direct") # 'direct' or 'info'
 
 # Handle boolean for QUEUE_ENABLED
-raw_queue_enabled = get_env("QUEUE_ENABLED", "False")
+raw_queue_enabled = os.getenv("QUEUE_ENABLED", "False")
 QUEUE_ENABLED = raw_queue_enabled.lower() in ['true', '1', 't']
 
 # Handle integer for AUTO_DELETE_DELAY
-AUTO_DELETE_DELAY_STRING = get_env("AUTO_DELETE_DELAY", "0")
+AUTO_DELETE_DELAY_STRING = os.getenv("AUTO_DELETE_DELAY", "0")
 try:
     AUTO_DELETE_DELAY = int(AUTO_DELETE_DELAY_STRING)
-except ValueError:
+except (ValueError, TypeError):
     AUTO_DELETE_DELAY = 0
+
+# --- Sanity Checks ---
+# Ensure critical variables are set, so the bot fails fast.
+if not BOT_TOKEN:
+    raise ValueError("FATAL: BOT_TOKEN environment variable is not set.")
+if not ALLOWED_GROUP_ID:
+    raise ValueError("FATAL: ALLOWED_GROUP_ID environment variable is not set.")
+if not DATABASE_URL:
+    raise ValueError("FATAL: DATABASE_URL environment variable is not set.")
+if not ADMINS:
+    raise ValueError("FATAL: ADMINS environment variable is not set or is empty.")
