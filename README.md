@@ -79,11 +79,77 @@ You can deploy this bot to [Choreo](https://console.choreo.dev/) for a managed d
     pip install -r requirements.txt
     ```
 3.  **Configure the Bot:**
-    -   Open the `config.py` file and fill in all your details, including the `DATABASE_URL` for your PostgreSQL database.
+    -   The bot is configured via environment variables. Make sure to set `BOT_TOKEN`, `ALLOWED_GROUP_ID`, `DATABASE_URL`, and `ADMINS` before running.
 4.  **Running the Bot:**
     ```bash
     python bot.py
     ```
+
+---
+
+### 4. Deploy on Termux (for Local Testing)
+
+This method allows you to run the bot on an Android device using the Termux terminal emulator, which is useful for local testing and development.
+
+**Prerequisites:**
+- [Termux](https://f-droid.org/en/packages/com.termux/) installed on your Android device.
+- A PostgreSQL database. Since installing PostgreSQL on Termux can be complex, it is highly recommended to use a free cloud provider like [Supabase](https://supabase.com/database), [Neon](https://neon.tech), or [ElephantSQL](https://www.elephantsql.com/).
+
+**Steps:**
+
+1.  **Update Termux Packages:**
+    Open Termux and run the following commands to ensure all packages are up to date:
+    ```bash
+    pkg update && pkg upgrade
+    ```
+
+2.  **Install Dependencies:**
+    Install `git`, `python`, and `ffmpeg`, which are required to run the bot:
+    ```bash
+    pkg install git python ffmpeg
+    ```
+
+3.  **Clone the Repository:**
+    ```bash
+    git clone <repository-url>
+    cd <repository-directory>
+    ```
+
+4.  **Set Up a Virtual Environment (Recommended):**
+    Using a virtual environment prevents conflicts with other Python projects.
+    ```bash
+    python -m venv venv
+    source venv/bin/activate
+    ```
+    *To deactivate the virtual environment later, simply run `deactivate`.*
+
+5.  **Install Python Libraries:**
+    Install all the required Python libraries from the `requirements.txt` file.
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+6.  **Configure Environment Variables:**
+    The bot is configured using environment variables. You can set them for your current session like this. **Remember to replace the placeholder values with your actual credentials.**
+    ```bash
+    export BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN"
+    export ALLOWED_GROUP_ID="YOUR_ALLOWED_GROUP_ID"
+    export DATABASE_URL="YOUR_POSTGRESQL_DATABASE_URL"
+    export ADMINS="ADMIN_ID_1,ADMIN_ID_2"
+    # --- Optional Variables ---
+    export BOT_USERNAME="YOUR_BOT_USERNAME"
+    export FORCE_SUB_CHANNEL="@your_channel_username"
+    export SPOTIPY_CLIENT_ID="YOUR_SPOTIFY_ID"
+    export SPOTIPY_CLIENT_SECRET="YOUR_SPOTIFY_SECRET"
+    ```
+    **Note:** These variables are only set for the current Termux session. If you close and reopen Termux, you will need to export them again.
+
+7.  **Running the Bot:**
+    Once the dependencies are installed and the environment variables are set, you can start the bot:
+    ```bash
+    python bot.py
+    ```
+    The bot should now be running on your device.
 
 ## Admin Commands
 

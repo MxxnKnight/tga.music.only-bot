@@ -14,6 +14,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatMemberStatus
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
 from aiohttp import web
+from mutagen.mp3 import MP3
+from mutagen.id3 import APIC, ID3NoHeaderError, ID3
 
 # Enable logging
 logging.basicConfig(
@@ -405,37 +407,86 @@ async def download_and_send_song(update: Update, application: Application, info:
     chat_id = message.chat_id
     download_path = os.path.join('downloads', str(chat_id))
     os.makedirs(download_path, exist_ok=True)
-    outtmpl = os.path.join(download_path, f"{info['id']}.%(ext)s")
-    ydl_opts = {'format': 'bestaudio/best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '320'}], 'outtmpl': outtmpl, 'noplaylist': True, 'writethumbnail': True}
+
+    base_filename = info['id']
+    outtmpl = os.path.join(download_path, f"{base_filename}.%(ext)s")
+
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '320'
+        }],
+        'outtmpl': outtmpl,
+        'noplaylist': True,
+        'writethumbnail': True
+    }
+
+    downloaded_mp3_path = None
+    thumbnail_path = None
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             await message.edit_text("Downloading...")
             ydl.download([info['webpage_url']])
-            downloaded_file = outtmpl.replace('.%(ext)s', '.mp3')
-            if not os.path.exists(downloaded_file):
-                for file in os.listdir(download_path):
-                    if file.startswith(info['id']) and file.endswith('.mp3'):
-                        downloaded_file = os.path.join(download_path, file)
-                        break
-            if not os.path.exists(downloaded_file): raise FileNotFoundError("Downloaded MP3 not found.")
+
+            downloaded_mp3_path = os.path.join(download_path, f"{base_filename}.mp3")
+            for file in os.listdir(download_path):
+                if file.startswith(base_filename) and file.split('.')[-1] in ['jpg', 'jpeg', 'png', 'webp']:
+                    thumbnail_path = os.path.join(download_path, file)
+                    break
+
+            if not os.path.exists(downloaded_mp3_path):
+                raise FileNotFoundError(f"Downloaded MP3 not found at {downloaded_mp3_path}")
+
+            if thumbnail_path and os.path.exists(thumbnail_path):
+                try:
+                    audio = MP3(downloaded_mp3_path, ID3=ID3)
+                except ID3NoHeaderError:
+                    audio = MP3(downloaded_mp3_path)
+                    audio.add_tags()
+
+                mime_type = 'image/jpeg' if thumbnail_path.endswith(('.jpg', '.jpeg')) else 'image/png'
+                with open(thumbnail_path, 'rb') as art:
+                    audio.tags.add(APIC(encoding=3, mime=mime_type, type=3, desc='Cover', data=art.read()))
+                audio.save()
+                logger.info(f"Embedded thumbnail into {downloaded_mp3_path}")
+
             await message.edit_text("Uploading song...")
             title, artist, duration, album = info.get('title', 'Unknown Title'), info.get('uploader', 'Unknown Artist'), info.get('duration', 0), info.get('album', None)
             caption = f"🎵 **{title}**\n👤 **{artist}**" + (f"\n💿 **{album}**" if album else "")
             delay = application.bot_data.get('auto_delete_delay')
-            if delay > 0: caption += f"\n\n⚠️ *This file will be deleted in {delay} minutes.*"
-            with open(downloaded_file, 'rb') as audio_file:
-                sent_message = await application.bot.send_audio(chat_id=chat_id, audio=audio_file, caption=caption, title=title, performer=artist, duration=duration, parse_mode=ParseMode.MARKDOWN)
+            if delay > 0:
+                caption += f"\n\n⚠️ *This file will be deleted in {delay} minutes.*"
+
+            with open(downloaded_mp3_path, 'rb') as audio_file:
+                sent_message = await application.bot.send_audio(
+                    chat_id=chat_id,
+                    audio=audio_file,
+                    caption=caption,
+                    title=title,
+                    performer=artist,
+                    duration=duration,
+                    parse_mode=ParseMode.MARKDOWN,
+                    thumbnail=thumbnail_path
+                )
+
             if delay > 0:
                 application.job_queue.run_once(delete_message_job, when=timedelta(minutes=delay), data={'message_id': sent_message.message_id}, chat_id=chat_id, name=f"delete_{chat_id}_{sent_message.message_id}")
-            os.remove(downloaded_file)
+
             await message.delete()
+
     except Exception as e:
         logger.error(f"Error in download_and_send_song: {e}")
         await message.edit_text("Sorry, an unexpected error occurred during download.")
     finally:
-        if os.path.exists(download_path):
-            if os.listdir(download_path):
-                for file in os.listdir(download_path): os.remove(os.path.join(download_path, file))
+        if downloaded_mp3_path and os.path.exists(downloaded_mp3_path):
+            os.remove(downloaded_mp3_path)
+        if thumbnail_path and os.path.exists(thumbnail_path):
+            os.remove(thumbnail_path)
+
+        if os.path.exists(download_path) and not os.listdir(download_path):
             os.rmdir(download_path)
 
 async def main() -> None:
