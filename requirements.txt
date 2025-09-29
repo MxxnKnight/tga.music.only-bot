@@ -4,4 +4,3 @@ spotipy
 asyncpg
 aiohttp
 mutagen
-ffmpeg
