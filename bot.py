@@ -8,6 +8,7 @@ import spotipy
 import asyncio
 import db
 import admin_panel
+import functools
 from datetime import timedelta
 from spotipy.oauth2 import SpotifyClientCredentials
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -443,10 +444,66 @@ async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, vi
         else:
             await update.message.reply_text("Force subscription is not configured.")
 
+def _blocking_download_and_process(ydl_opts, info, download_path, base_filename):
+    """
+    Handles the blocking I/O tasks: downloading, processing, and embedding thumbnail.
+    This function is designed to be run in a separate thread.
+    """
+    os.makedirs(download_path, exist_ok=True)
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([info['webpage_url']])
+
+    downloaded_mp3_path = os.path.join(download_path, f"{base_filename}.mp3")
+    thumbnail_path = None
+    for file in os.listdir(download_path):
+        if file.startswith(base_filename) and file.split('.')[-1] in ['jpg', 'jpeg', 'png', 'webp']:
+            thumbnail_path = os.path.join(download_path, file)
+            break
+
+    if not os.path.exists(downloaded_mp3_path):
+        raise FileNotFoundError(f"Downloaded MP3 not found at {downloaded_mp3_path}")
+
+    thumbnail_bytes = None
+    if thumbnail_path and os.path.exists(thumbnail_path):
+        try:
+            audio = MP3(downloaded_mp3_path, ID3=ID3)
+        except ID3NoHeaderError:
+            audio = MP3(downloaded_mp3_path)
+            audio.add_tags()
+
+        mime_type = 'image/jpeg' if thumbnail_path.endswith(('.jpg', '.jpeg')) else 'image/png'
+        with open(thumbnail_path, 'rb') as art:
+            thumbnail_bytes = art.read()
+            audio.tags.add(APIC(encoding=3, mime=mime_type, type=3, desc='Cover', data=thumbnail_bytes))
+        audio.save()
+        logger.info(f"Embedded thumbnail into {downloaded_mp3_path}")
+
+    return downloaded_mp3_path, thumbnail_path, thumbnail_bytes
+
+def _blocking_cleanup(paths_to_clean):
+    """
+    Handles the blocking I/O task of cleaning up files.
+    This function is designed to be run in a separate thread.
+    """
+    for path in paths_to_clean:
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+            elif os.path.isdir(path):
+                # Only remove directory if it's empty
+                if not os.listdir(path):
+                    os.rmdir(path)
+        except Exception as e:
+            logger.error(f"Error during cleanup of {path}: {e}")
+
+
 async def download_and_send_song(update: Update, application: Application, info: dict, message):
+    loop = asyncio.get_running_loop()
     chat_id = message.chat_id
     download_path = os.path.join('downloads', str(chat_id))
-    os.makedirs(download_path, exist_ok=True)
 
     base_filename = info['id']
     outtmpl = os.path.join(download_path, f"{base_filename}.%(ext)s")
@@ -467,57 +524,35 @@ async def download_and_send_song(update: Update, application: Application, info:
     thumbnail_path = None
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            await message.edit_text("Downloading...")
-            ydl.download([info['webpage_url']])
+        await message.edit_text("Downloading...")
 
-            downloaded_mp3_path = os.path.join(download_path, f"{base_filename}.mp3")
-            for file in os.listdir(download_path):
-                if file.startswith(base_filename) and file.split('.')[-1] in ['jpg', 'jpeg', 'png', 'webp']:
-                    thumbnail_path = os.path.join(download_path, file)
-                    break
+        # Run the blocking download and processing in a separate thread
+        blocking_task = functools.partial(_blocking_download_and_process, ydl_opts, info, download_path, base_filename)
+        downloaded_mp3_path, thumbnail_path, thumbnail_bytes = await loop.run_in_executor(None, blocking_task)
 
-            if not os.path.exists(downloaded_mp3_path):
-                raise FileNotFoundError(f"Downloaded MP3 not found at {downloaded_mp3_path}")
+        await message.edit_text("Uploading song...")
+        title, artist, duration, album = info.get('title', 'Unknown Title'), info.get('uploader', 'Unknown Artist'), info.get('duration', 0), info.get('album', None)
+        caption = f"🎵 **{title}**\n👤 **{artist}**" + (f"\n💿 **{album}**" if album else "")
+        delay = application.bot_data.get('auto_delete_delay', 0)
+        if delay > 0:
+            caption += f"\n\n⚠️ *This file will be deleted in {delay} minutes.*"
 
-            thumbnail_bytes = None
-            if thumbnail_path and os.path.exists(thumbnail_path):
-                try:
-                    audio = MP3(downloaded_mp3_path, ID3=ID3)
-                except ID3NoHeaderError:
-                    audio = MP3(downloaded_mp3_path)
-                    audio.add_tags()
+        with open(downloaded_mp3_path, 'rb') as audio_file:
+            sent_message = await application.bot.send_audio(
+                chat_id=chat_id,
+                audio=audio_file,
+                caption=caption,
+                title=title,
+                performer=artist,
+                duration=duration,
+                parse_mode=ParseMode.MARKDOWN,
+                thumbnail=thumbnail_bytes
+            )
 
-                mime_type = 'image/jpeg' if thumbnail_path.endswith(('.jpg', '.jpeg')) else 'image/png'
-                with open(thumbnail_path, 'rb') as art:
-                    thumbnail_bytes = art.read()
-                    audio.tags.add(APIC(encoding=3, mime=mime_type, type=3, desc='Cover', data=thumbnail_bytes))
-                audio.save()
-                logger.info(f"Embedded thumbnail into {downloaded_mp3_path}")
+        if delay > 0:
+            application.job_queue.run_once(delete_message_job, when=timedelta(minutes=delay), data={'message_id': sent_message.message_id}, chat_id=chat_id, name=f"delete_{chat_id}_{sent_message.message_id}")
 
-            await message.edit_text("Uploading song...")
-            title, artist, duration, album = info.get('title', 'Unknown Title'), info.get('uploader', 'Unknown Artist'), info.get('duration', 0), info.get('album', None)
-            caption = f"🎵 **{title}**\n👤 **{artist}**" + (f"\n💿 **{album}**" if album else "")
-            delay = application.bot_data.get('auto_delete_delay', 0)
-            if delay > 0:
-                caption += f"\n\n⚠️ *This file will be deleted in {delay} minutes.*"
-
-            with open(downloaded_mp3_path, 'rb') as audio_file:
-                sent_message = await application.bot.send_audio(
-                    chat_id=chat_id,
-                    audio=audio_file,
-                    caption=caption,
-                    title=title,
-                    performer=artist,
-                    duration=duration,
-                    parse_mode=ParseMode.MARKDOWN,
-                    thumbnail=thumbnail_bytes
-                )
-
-            if delay > 0:
-                application.job_queue.run_once(delete_message_job, when=timedelta(minutes=delay), data={'message_id': sent_message.message_id}, chat_id=chat_id, name=f"delete_{chat_id}_{sent_message.message_id}")
-
-            await message.delete()
+        await message.delete()
 
     except Exception as e:
         logger.error(f"Error in download_and_send_song: {e}")
@@ -526,22 +561,10 @@ async def download_and_send_song(update: Update, application: Application, info:
         except:
             pass
     finally:
-        if downloaded_mp3_path and os.path.exists(downloaded_mp3_path):
-            try:
-                os.remove(downloaded_mp3_path)
-            except:
-                pass
-        if thumbnail_path and os.path.exists(thumbnail_path):
-            try:
-                os.remove(thumbnail_path)
-            except:
-                pass
-
-        if os.path.exists(download_path) and not os.listdir(download_path):
-            try:
-                os.rmdir(download_path)
-            except:
-                pass
+        # Run cleanup in a separate thread
+        paths_to_clean = [downloaded_mp3_path, thumbnail_path, download_path]
+        cleanup_task = functools.partial(_blocking_cleanup, paths_to_clean)
+        await loop.run_in_executor(None, cleanup_task)
 
 async def main() -> None:
     """Initializes, configures, and runs the bot."""
