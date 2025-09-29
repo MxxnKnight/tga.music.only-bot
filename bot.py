@@ -92,6 +92,11 @@ async def queue_worker(application: Application):
         finally:
             download_queue.task_done()
 
+async def start_queue_worker(application: Application) -> None:
+    """Starts the queue worker as a background task."""
+    asyncio.create_task(queue_worker(application))
+    logger.info("Queue worker started.")
+
 # --- Admin and Helper Functions ---
 def is_admin(user_id: int) -> bool:
     """Check if a user is an admin."""
@@ -440,6 +445,7 @@ async def download_and_send_song(update: Update, application: Application, info:
             if not os.path.exists(downloaded_mp3_path):
                 raise FileNotFoundError(f"Downloaded MP3 not found at {downloaded_mp3_path}")
 
+            thumbnail_bytes = None
             if thumbnail_path and os.path.exists(thumbnail_path):
                 try:
                     audio = MP3(downloaded_mp3_path, ID3=ID3)
@@ -449,7 +455,8 @@ async def download_and_send_song(update: Update, application: Application, info:
 
                 mime_type = 'image/jpeg' if thumbnail_path.endswith(('.jpg', '.jpeg')) else 'image/png'
                 with open(thumbnail_path, 'rb') as art:
-                    audio.tags.add(APIC(encoding=3, mime=mime_type, type=3, desc='Cover', data=art.read()))
+                    thumbnail_bytes = art.read()
+                    audio.tags.add(APIC(encoding=3, mime=mime_type, type=3, desc='Cover', data=thumbnail_bytes))
                 audio.save()
                 logger.info(f"Embedded thumbnail into {downloaded_mp3_path}")
 
@@ -469,7 +476,7 @@ async def download_and_send_song(update: Update, application: Application, info:
                     performer=artist,
                     duration=duration,
                     parse_mode=ParseMode.MARKDOWN,
-                    thumbnail=thumbnail_path
+                    thumbnail=thumbnail_bytes
                 )
 
             if delay > 0:
@@ -490,25 +497,24 @@ async def download_and_send_song(update: Update, application: Application, info:
             os.rmdir(download_path)
 
 async def main() -> None:
-    """Start the bot and the health check server."""
+    """Initializes, configures, and runs the bot."""
+    # --- Initialization ---
     await db.initialize_db()
     loaded_settings = await db.load_all_settings()
 
-    # Use post_init and post_shutdown for the health check server
+    # --- Application Setup ---
     application = (
         Application.builder()
         .token(config.BOT_TOKEN)
-        .post_init(start_health_check_server)
+        .post_init([start_health_check_server, start_queue_worker])
         .post_shutdown(shutdown_health_check_server)
         .build()
     )
 
+    # Load the persistent settings into the bot
     application.bot_data.update(loaded_settings)
 
-    # The queue worker should be started as a background task
-    # It will be managed by the application's event loop
-    asyncio.create_task(queue_worker(application))
-
+    # --- Command and Message Handlers ---
     admin_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("panel", panel_command)],
         states={
@@ -528,8 +534,10 @@ async def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(checksub_callback_handler, pattern='^checksub_.*'))
 
-    # run_polling will now also manage the aiohttp server lifecycle
+    # --- Run the Bot ---
+    # This will run the bot until the user presses Ctrl-C
     await application.run_polling()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
