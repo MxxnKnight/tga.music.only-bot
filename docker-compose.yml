@@ -5,24 +5,8 @@ services:
     build: .
     container_name: telegram_music_bot
     environment:
-      # This URL connects the bot to the postgres container.
-      # Ensure the user, password, and db_name match the 'db' service below.
+      # Database connection (connects to the postgres container)
       DATABASE_URL: "postgresql://postgres:mysecretpassword@db:5432/music_bot_db"
-    depends_on:
-      - db
-    restart: unless-stopped
-
-  db:
-    image: postgres:14-alpine
-    container_name: postgres_db
-    environment:
-      POSTGRES_DB: music_bot_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: mysecretpassword
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    restart: unless-stopped
-
-volumes:
-  postgres_data:
-    driver: local
+      
+      # REQUIRED: Bot configuration (YOU MUST SET THESE!)
+      BOT_TOKEN: "${BOT
