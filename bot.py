@@ -323,27 +323,37 @@ async def set_delay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return SELECTING_ACTION
 
 async def update_cookies_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handles receiving a new cookie file or text."""
+    """Handles receiving a new cookie file or text, with improved error handling."""
     cookie_data = ""
-    if update.message.document:
-        if update.message.document.file_name == 'cookies.txt':
+    try:
+        if update.message.document:
+            # The ConversationHandler filter already ensures this is a .txt file.
             file = await context.bot.get_file(update.message.document.file_id)
-            cookie_data = (await file.download_as_bytearray()).decode('utf-8')
-        else:
-            await update.message.reply_text("Invalid file. Please send a file named `cookies.txt`.")
-            return UPDATING_COOKIES
-    elif update.message.text:
-        cookie_data = update.message.text
-
-    if not cookie_data:
-        await update.message.reply_text("Could not read cookie data. Please try again.")
+            byte_data = await file.download_as_bytearray()
+            cookie_data = byte_data.decode('utf-8')
+            if not cookie_data.strip():
+                await update.message.reply_text("The provided file appears to be empty. Please try again.", quote=True)
+                return UPDATING_COOKIES
+        elif update.message.text:
+            cookie_data = update.message.text
+            if not cookie_data.strip():
+                await update.message.reply_text("The provided text message is empty. Please try again.", quote=True)
+                return UPDATING_COOKIES
+    except Exception as e:
+        logger.error(f"Error reading cookie data from user: {e}")
+        await update.message.reply_text("Sorry, I was unable to read the provided cookie data. Please try again.", quote=True)
         return UPDATING_COOKIES
 
     expires_at = parse_cookie_file(cookie_data)
     if not expires_at:
-        await update.message.reply_text("⚠️ Could not find a valid expiration date in the cookies. Please ensure they are in the Netscape format.", quote=True)
-        # We can still save them, but the user should be warned.
-        expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=365) # Default to 1 year
+        await update.message.reply_text(
+            "⚠️ **Warning**: Could not find a valid expiration date in the cookies. Please ensure they are in the Netscape format. "
+            "I will still save them, but automatic expiration warnings may not work correctly.",
+            quote=True,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        # Default to 1 year from now if no date is found, so we don't spam the user.
+        expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=365)
 
     # Update db and bot_data
     await db.set_cookies(cookie_data, expires_at)
