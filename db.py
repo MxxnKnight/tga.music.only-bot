@@ -1,8 +1,10 @@
 # db.py
+# db.py
 import asyncpg
 import config
 import logging
 import json
+import datetime
 
 logger = logging.getLogger(__name__)
 pool = None
@@ -21,11 +23,10 @@ async def initialize_db():
     Also ensures default settings are in the database.
     """
     global pool
-    # Prioritize DATABASE_URL from environment variables (for Docker), then fall back to config file.
     database_url = os.environ.get('DATABASE_URL') or config.DATABASE_URL
 
     if not database_url:
-        logger.error("DATABASE_URL not set in environment or config.py. Database features will be disabled.")
+        logger.error("DATABASE_URL not set. Database features will be disabled.")
         return
     try:
         pool = await asyncpg.create_pool(dsn=database_url)
@@ -37,6 +38,11 @@ async def initialize_db():
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
                     value JSONB
+                );
+                CREATE TABLE IF NOT EXISTS cookies (
+                    id INT PRIMARY KEY,
+                    cookie_data TEXT,
+                    expires_at TIMESTAMP
                 );
             ''')
             # Ensure default settings are present
@@ -110,3 +116,42 @@ async def set_setting(key: str, value):
             )
     except Exception as e:
         logger.error(f"Error setting '{key}' in database: {e}")
+
+async def set_cookies(cookie_data: str, expires_at: datetime.datetime):
+    """Saves or updates the cookies in the database."""
+    if not pool: return
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO cookies (id, cookie_data, expires_at) VALUES (1, $1, $2)
+                ON CONFLICT (id) DO UPDATE SET cookie_data = $1, expires_at = $2
+                """,
+                cookie_data, expires_at
+            )
+            logger.info("Cookies have been updated in the database.")
+    except Exception as e:
+        logger.error(f"Error saving cookies to database: {e}")
+
+async def get_cookies() -> tuple[str | None, datetime.datetime | None]:
+    """Retrieves cookies from the database."""
+    if not pool: return None, None
+    try:
+        async with pool.acquire() as conn:
+            record = await conn.fetchrow("SELECT cookie_data, expires_at FROM cookies WHERE id = 1")
+            if record:
+                return record['cookie_data'], record['expires_at']
+            return None, None
+    except Exception as e:
+        logger.error(f"Error retrieving cookies from database: {e}")
+        return None, None
+
+async def delete_cookies():
+    """Deletes cookies from the database."""
+    if not pool: return
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM cookies WHERE id = 1")
+            logger.info("Cookies have been deleted from the database.")
+    except Exception as e:
+        logger.error(f"Error deleting cookies from database: {e}")

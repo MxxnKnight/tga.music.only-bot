@@ -1,6 +1,8 @@
 # admin_panel.py
+# admin_panel.py
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import config
+import datetime
 
 # --- Main Panel ---
 def get_main_panel(context):
@@ -9,6 +11,7 @@ def get_main_panel(context):
     keyboard = [
         [InlineKeyboardButton("📤 Upload Mode", callback_data="admin_upload_mode")],
         [InlineKeyboardButton("🔄 Queue System", callback_data="admin_queue")],
+        [InlineKeyboardButton("🍪 Manage Cookies", callback_data="admin_cookies")],
         [InlineKeyboardButton("⏱️ Auto-Delete Delay", callback_data="admin_delay")],
         [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast")],
         [InlineKeyboardButton("📊 Stats", callback_data="admin_stats")],
@@ -32,6 +35,36 @@ def get_upload_mode_panel(context):
                 f"{'🟢' if current_mode == 'info' else ''} Info",
                 callback_data="admin_set_upload_info"
             )
+        ],
+        [InlineKeyboardButton("⬅️ Back", callback_data="admin_back_to_main")]
+    ]
+    return text, InlineKeyboardMarkup(keyboard)
+
+# --- Cookies Panel ---
+def get_cookies_panel(context):
+    """Generates the cookie management panel."""
+    cookie_data = context.bot_data.get('cookie_data')
+    expires_at = context.bot_data.get('cookie_expires_at')
+
+    if cookie_data and expires_at:
+        now = datetime.datetime.now(expires_at.tzinfo)
+        if expires_at > now:
+            days_left = (expires_at - now).days
+            status = f"✅ Set, expires in {days_left} days ({expires_at.strftime('%Y-%m-%d')})"
+        else:
+            status = "⚠️ Expired"
+    else:
+        status = "❌ Not set"
+
+    text = (
+        f"🍪 *Cookie Management*\n\n"
+        f"Current Status: *{status}*\n\n"
+        "To update, send or forward a `cookies.txt` file or paste the cookie data as a text message."
+    )
+    keyboard = [
+        [
+            InlineKeyboardButton("Update Cookies", callback_data="admin_update_cookies"),
+            InlineKeyboardButton("Remove Cookies", callback_data="admin_remove_cookies")
         ],
         [InlineKeyboardButton("⬅️ Back", callback_data="admin_back_to_main")]
     ]

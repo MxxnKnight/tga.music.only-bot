@@ -9,6 +9,7 @@ import asyncio
 import db
 import admin_panel
 import functools
+import datetime
 from datetime import timedelta
 from spotipy.oauth2 import SpotifyClientCredentials
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -71,8 +72,43 @@ async def shutdown_health_check_server(application: Application) -> None:
 
 
 # Conversation states for Admin Panel
-SELECTING_ACTION, SETTING_DELAY, BROADCASTING_MESSAGE, BROADCASTING_CONFIRM = range(4)
+SELECTING_ACTION, SETTING_DELAY, BROADCASTING_MESSAGE, BROADCASTING_CONFIRM, UPDATING_COOKIES = range(5)
 
+COOKIE_FILE = "cookies.txt"
+
+# --- Cookie Utilities ---
+def parse_cookie_file(cookie_data: str) -> datetime.datetime | None:
+    """Parses a Netscape cookie file string to find the latest expiration date."""
+    latest_expiry = 0
+    for line in cookie_data.strip().split('\n'):
+        if line.startswith('#') or not line.strip():
+            continue
+        parts = line.split('\t')
+        if len(parts) >= 5:
+            try:
+                expiry_timestamp = int(parts[4])
+                if expiry_timestamp > latest_expiry:
+                    latest_expiry = expiry_timestamp
+            except (ValueError, IndexError):
+                continue
+
+    if latest_expiry > 0:
+        return datetime.datetime.fromtimestamp(latest_expiry, tz=datetime.timezone.utc)
+    return None
+
+async def write_cookies_to_file(cookie_data: str | None):
+    """Writes the provided cookie data to the COOKIE_FILE."""
+    try:
+        if cookie_data:
+            with open(COOKIE_FILE, "w") as f:
+                f.write(cookie_data)
+            logger.info(f"Successfully wrote cookies to {COOKIE_FILE}")
+        else:
+            if os.path.exists(COOKIE_FILE):
+                os.remove(COOKIE_FILE)
+            logger.info(f"Removed {COOKIE_FILE} as cookie data is empty.")
+    except Exception as e:
+        logger.error(f"Failed to write to {COOKIE_FILE}: {e}")
 
 # --- Job Queue Callbacks ---
 async def delete_message_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -83,6 +119,33 @@ async def delete_message_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info(f"Auto-deleted message {job.data['message_id']} in chat {job.chat_id}")
     except Exception as e:
         logger.error(f"Failed to delete message {job.data['message_id']} in chat {job.chat_id}: {e}")
+
+async def check_cookie_expiration_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Checks daily if cookies are about to expire and notifies admins."""
+    expires_at = context.bot_data.get('cookie_expires_at')
+    if not expires_at:
+        return
+
+    # Ensure expires_at is timezone-aware for comparison
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    days_left = (expires_at - now).days
+
+    # Notify if expiring within 7 days, or if already expired
+    if days_left <= 7:
+        logger.info(f"YouTube cookies are expiring in {days_left} days. Notifying admins.")
+        if days_left > 0:
+            message = f"⚠️ **Cookie Expiration Warning** ⚠️\n\nYour YouTube cookies will expire in *{days_left} day(s)*.\n\nPlease update them soon via the admin panel to avoid download interruptions."
+        else:
+            message = f"🚨 **Cookies Expired** 🚨\n\nYour YouTube cookies have expired. Downloads may fail until they are updated via the admin panel."
+
+        for admin_id in config.ADMINS:
+            try:
+                await context.bot.send_message(chat_id=int(admin_id), text=message, parse_mode=ParseMode.MARKDOWN)
+            except Exception as e:
+                logger.error(f"Failed to send expiration warning to admin {admin_id}: {e}")
 
 
 # --- Queue System ---
@@ -216,6 +279,19 @@ async def admin_panel_actions(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif data == "admin_broadcast":
         await query.edit_message_text("Please send the message you want to broadcast now.\n\nTo cancel, use /cancel.")
         return BROADCASTING_MESSAGE
+    elif data == "admin_cookies":
+        await update_and_show_panel(admin_panel.get_cookies_panel)
+    elif data == "admin_update_cookies":
+        await query.edit_message_text("Please send your `cookies.txt` file or paste the cookie data as text.")
+        return UPDATING_COOKIES
+    elif data == "admin_remove_cookies":
+        context.bot_data['cookie_data'] = None
+        context.bot_data['cookie_expires_at'] = None
+        await db.delete_cookies()
+        await write_cookies_to_file(None)
+        await context.bot.answer_callback_query(query.id, text="✅ Cookies have been removed.", show_alert=True)
+        await update_and_show_panel(admin_panel.get_cookies_panel)
+
 
     return SELECTING_ACTION
 
@@ -237,6 +313,50 @@ async def set_delay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     # Return to main panel
     text, keyboard = admin_panel.get_main_panel(context)
+    await context.bot.edit_message_text(
+        text=text,
+        chat_id=update.effective_chat.id,
+        message_id=context.user_data['panel_message_id'],
+        reply_markup=keyboard,
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return SELECTING_ACTION
+
+async def update_cookies_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles receiving a new cookie file or text."""
+    cookie_data = ""
+    if update.message.document:
+        if update.message.document.file_name == 'cookies.txt':
+            file = await context.bot.get_file(update.message.document.file_id)
+            cookie_data = (await file.download_as_bytearray()).decode('utf-8')
+        else:
+            await update.message.reply_text("Invalid file. Please send a file named `cookies.txt`.")
+            return UPDATING_COOKIES
+    elif update.message.text:
+        cookie_data = update.message.text
+
+    if not cookie_data:
+        await update.message.reply_text("Could not read cookie data. Please try again.")
+        return UPDATING_COOKIES
+
+    expires_at = parse_cookie_file(cookie_data)
+    if not expires_at:
+        await update.message.reply_text("⚠️ Could not find a valid expiration date in the cookies. Please ensure they are in the Netscape format.", quote=True)
+        # We can still save them, but the user should be warned.
+        expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=365) # Default to 1 year
+
+    # Update db and bot_data
+    await db.set_cookies(cookie_data, expires_at)
+    context.bot_data['cookie_data'] = cookie_data
+    context.bot_data['cookie_expires_at'] = expires_at
+
+    # Write to file for yt-dlp to use
+    await write_cookies_to_file(cookie_data)
+
+    await update.message.reply_text("✅ Cookies updated successfully!", quote=True)
+
+    # Return to the cookies panel
+    text, keyboard = admin_panel.get_cookies_panel(context)
     await context.bot.edit_message_text(
         text=text,
         chat_id=update.effective_chat.id,
@@ -456,9 +576,13 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
     os.makedirs(download_path, exist_ok=True)
 
     # Add cookie file to options if it exists
-    if config.COOKIE_FILE_PATH and os.path.exists(config.COOKIE_FILE_PATH):
+    if os.path.exists(COOKIE_FILE):
+        ydl_opts['cookiefile'] = COOKIE_FILE
+        logger.info(f"Using cookie file at: {COOKIE_FILE}")
+    elif config.COOKIE_FILE_PATH and os.path.exists(config.COOKIE_FILE_PATH):
+        # Fallback to env var for backward compatibility
         ydl_opts['cookiefile'] = config.COOKIE_FILE_PATH
-        logger.info(f"Using cookie file at: {config.COOKIE_FILE_PATH}")
+        logger.info(f"Using cookie file from env var at: {config.COOKIE_FILE_PATH}")
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([info['webpage_url']])
@@ -565,15 +689,47 @@ async def download_and_send_song(update: Update, application: Application, info:
 
     except Exception as e:
         logger.error(f"Error in download_and_send_song: {e}")
-        try:
-            await message.edit_text("Sorry, an unexpected error occurred during download.")
-        except:
-            pass
+
+        # Check for cookie-related errors
+        error_message = str(e).lower()
+        if "login" in error_message or "sign in" in error_message or "authentication" in error_message or "403" in error_message or "access denied" in error_message:
+            logger.warning("Download failed, possibly due to expired cookies. Notifying admins.")
+            notification = "🚨 **Download Failed: Possible Cookie Issue** 🚨\n\nA download failed with an authentication error. Your cookies may have expired or be invalid. Please update them via the admin panel."
+            for admin_id in config.ADMINS:
+                try:
+                    await application.bot.send_message(chat_id=int(admin_id), text=notification, parse_mode=ParseMode.MARKDOWN)
+                except Exception as admin_e:
+                    logger.error(f"Failed to send cookie error warning to admin {admin_id}: {admin_e}")
+
+            try:
+                await message.edit_text("Sorry, a download error occurred. The admins have been notified if this looks like a cookie issue.")
+            except:
+                pass
+        else:
+            try:
+                await message.edit_text("Sorry, an unexpected error occurred during download.")
+            except:
+                pass
     finally:
         # Run cleanup in a separate thread
         paths_to_clean = [downloaded_mp3_path, thumbnail_path, download_path]
         cleanup_task = functools.partial(_blocking_cleanup, paths_to_clean)
         await loop.run_in_executor(None, cleanup_task)
+
+async def load_cookies_on_start(application: Application) -> None:
+    """Loads cookies from the database into bot_data and writes them to a file on startup."""
+    logger.info("Loading cookies from database on startup...")
+    cookie_data, expires_at = await db.get_cookies()
+    if cookie_data and expires_at:
+        application.bot_data['cookie_data'] = cookie_data
+        application.bot_data['cookie_expires_at'] = expires_at
+        await write_cookies_to_file(cookie_data)
+        logger.info("Successfully loaded and wrote cookies from database.")
+    else:
+        logger.info("No cookies found in database.")
+        application.bot_data['cookie_data'] = None
+        application.bot_data['cookie_expires_at'] = None
+        await write_cookies_to_file(None) # Ensure no old file is lingering
 
 async def main() -> None:
     """Initializes, configures, and runs the bot."""
@@ -590,6 +746,7 @@ async def main() -> None:
         .token(config.BOT_TOKEN)
         .post_init(start_health_check_server)
         .post_init(start_queue_worker)
+        .post_init(load_cookies_on_start)
         .post_shutdown(shutdown_health_check_server)
         .build()
     )
@@ -604,7 +761,8 @@ async def main() -> None:
             SELECTING_ACTION: [CallbackQueryHandler(admin_panel_actions)],
             SETTING_DELAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_delay_handler)],
             BROADCASTING_MESSAGE: [MessageHandler(filters.ALL & ~filters.COMMAND, broadcast_message_handler)],
-            BROADCASTING_CONFIRM: [CallbackQueryHandler(broadcast_confirmation_handler)]
+            BROADCASTING_CONFIRM: [CallbackQueryHandler(broadcast_confirmation_handler)],
+            UPDATING_COOKIES: [MessageHandler(filters.TEXT | filters.Document.FileExtension("txt"), update_cookies_handler)]
         },
         fallbacks=[CommandHandler("cancel", cancel_command)],
         per_message=False,
@@ -616,6 +774,10 @@ async def main() -> None:
     application.add_handler(admin_conv_handler)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(checksub_callback_handler, pattern='^checksub_.*'))
+
+    # --- Schedule recurring jobs ---
+    application.job_queue.run_daily(check_cookie_expiration_job, time=datetime.time(hour=12, minute=0, tzinfo=datetime.timezone.utc), name="cookie_check")
+    logger.info("Scheduled daily cookie expiration check.")
 
     # --- Run the Bot ---
     logger.info("Starting bot polling...")
