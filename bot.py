@@ -580,7 +580,7 @@ async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, vi
 
 def _blocking_download_and_process(ydl_opts, info, download_path, base_filename):
     """
-    Handles the blocking I/O tasks: downloading, processing, and embedding thumbnail.
+    Handles the blocking I/O tasks: downloading, processing, and embedding thumbnail, with enhanced logging.
     This function is designed to be run in a separate thread.
     """
     os.makedirs(download_path, exist_ok=True)
@@ -593,9 +593,18 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
         # Fallback to env var for backward compatibility
         ydl_opts['cookiefile'] = config.COOKIE_FILE_PATH
         logger.info(f"Using cookie file from env var at: {config.COOKIE_FILE_PATH}")
+    else:
+        logger.info("No cookie file found or configured.")
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([info['webpage_url']])
+    logger.info(f"Starting download with yt-dlp options: {ydl_opts}")
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([info['webpage_url']])
+        logger.info("yt-dlp download completed successfully.")
+    except yt_dlp.utils.DownloadError as e:
+        # Log the specific yt-dlp error and re-raise it
+        logger.error(f"yt-dlp failed with a DownloadError: {e}")
+        raise e # Re-raise the exception to be caught by the calling async function
 
     downloaded_mp3_path = os.path.join(download_path, f"{base_filename}.mp3")
     thumbnail_path = None
@@ -698,7 +707,8 @@ async def download_and_send_song(update: Update, application: Application, info:
         await message.delete()
 
     except Exception as e:
-        logger.error(f"Error in download_and_send_song: {e}")
+        # Log the full traceback for detailed diagnostics
+        logger.error("An error occurred in download_and_send_song", exc_info=True)
 
         # Check for cookie-related errors
         error_message = str(e).lower()
@@ -717,7 +727,7 @@ async def download_and_send_song(update: Update, application: Application, info:
                 pass
         else:
             try:
-                await message.edit_text("Sorry, an unexpected error occurred during download.")
+                await message.edit_text(f"Sorry, an unexpected error occurred during download. The error was: `{e}`")
             except:
                 pass
     finally:
