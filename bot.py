@@ -23,12 +23,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Spotify setup
-spotify = spotipy.Spotify(
-    auth_manager=SpotifyClientCredentials(
-        client_id=config.SPOTIPY_CLIENT_ID, client_secret=config.SPOTIPY_CLIENT_SECRET
-    )
-)
+# Spotify setup (with error handling for missing credentials)
+spotify = None
+if config.SPOTIPY_CLIENT_ID and config.SPOTIPY_CLIENT_SECRET:
+    try:
+        spotify = spotipy.Spotify(
+            auth_manager=SpotifyClientCredentials(
+                client_id=config.SPOTIPY_CLIENT_ID, 
+                client_secret=config.SPOTIPY_CLIENT_SECRET
+            )
+        )
+        logger.info("Spotify integration enabled")
+    except Exception as e:
+        logger.warning(f"Spotify initialization failed: {e}")
+else:
+    logger.warning("Spotify credentials not provided. Spotify links will not work.")
 
 # --- Health Check Server (aiohttp) ---
 async def health_check_handler(request: web.Request) -> web.Response:
@@ -47,7 +56,7 @@ async def start_health_check_server(application: Application) -> None:
     site = web.TCPSite(runner, host='0.0.0.0', port=port)
     await site.start()
 
-    logger.info(f"Starting aiohttp health check server on port {port}...")
+    logger.info(f"Health check server running on port {port}")
     # Store runner and site in bot_data to be accessible for cleanup
     application.bot_data['aiohttp_runner'] = runner
     application.bot_data['aiohttp_site'] = site
@@ -56,7 +65,7 @@ async def shutdown_health_check_server(application: Application) -> None:
     """Gracefully shuts down the aiohttp web server."""
     runner = application.bot_data.get('aiohttp_runner')
     if runner:
-        logger.info("Shutting down aiohttp health check server...")
+        logger.info("Shutting down health check server...")
         await runner.cleanup()
 
 
@@ -80,22 +89,32 @@ download_queue = asyncio.Queue()
 
 async def queue_worker(application: Application):
     """Worker that processes the download queue."""
+    logger.info("Queue worker started.")
     while True:
-        item = await download_queue.get()
-        update, info, message = item['update'], item['info'], item['message']
-
         try:
-            await download_and_send_song(update, application, info, message)
+            item = await download_queue.get()
+            update, info, message = item['update'], item['info'], item['message']
+
+            try:
+                await download_and_send_song(update, application, info, message)
+            except Exception as e:
+                logger.error(f"Error processing item from queue: {e}")
+                try:
+                    await message.edit_text("Sorry, an error occurred while processing your request from the queue.")
+                except:
+                    pass
+            finally:
+                download_queue.task_done()
+        except asyncio.CancelledError:
+            logger.info("Queue worker cancelled")
+            break
         except Exception as e:
-            logger.error(f"Error processing item from queue: {e}")
-            await message.edit_text("Sorry, an error occurred while processing your request from the queue.")
-        finally:
-            download_queue.task_done()
+            logger.error(f"Unexpected error in queue worker: {e}")
 
 async def start_queue_worker(application: Application) -> None:
     """Starts the queue worker as a background task."""
-    asyncio.create_task(queue_worker(application))
-    logger.info("Queue worker started.")
+    task = asyncio.create_task(queue_worker(application))
+    application.bot_data['queue_worker_task'] = task
 
 # --- Admin and Helper Functions ---
 def is_admin(user_id: int) -> bool:
@@ -303,17 +322,24 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # --- Song Handling Logic ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
-    if update.effective_chat.type == 'private': await db.add_user(user_id)
-    if str(update.effective_chat.id) != config.ALLOWED_GROUP_ID and update.effective_chat.type != 'private': return
+    if update.effective_chat.type == 'private': 
+        await db.add_user(user_id)
+    if str(update.effective_chat.id) != config.ALLOWED_GROUP_ID and update.effective_chat.type != 'private': 
+        return
     if update.effective_chat.type == 'private':
         await update.message.reply_text("Sorry, you can't request songs directly in PM. Please use the allowed group.")
         return
+    
     message_text = update.message.text
     url_pattern = re.compile(r'https?://\S+')
     query = message_text
     message = await update.message.reply_text("Processing...")
+    
     if url_pattern.match(message_text):
         if "spotify.com" in message_text:
+            if not spotify:
+                await message.edit_text("Spotify integration is not configured.")
+                return
             try:
                 track = spotify.track(message_text)
                 query = f"{track['name']} {track['artists'][0]['name']}"
@@ -330,6 +356,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             else:
                 await message.edit_text("Could not extract info from Saavn link.")
                 return
+    
     await process_song_request(update, context, query, message)
 
 async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, message):
@@ -337,10 +364,10 @@ async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f"ytsearch:{query}", download=False)
-            if 'entries' in info and info['entries']: info = info['entries'][0]
+            if 'entries' in info and info['entries']: 
+                info = info['entries'][0]
 
             video_id = info['id']
-            # Don't cache song info in bot_data anymore. Pass it directly.
 
             if context.bot_data.get('upload_mode') == 'direct':
                 if await is_user_subscribed(update.effective_user.id, context):
@@ -355,8 +382,12 @@ async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYP
             else:
                 title, artist, album = info.get('title', 'Unknown Title'), info.get('uploader', 'Unknown Artist'), info.get('album', None)
                 caption = f"🎵 **{title}**\n👤 **{artist}**" + (f"\n💿 **{album}**" if album else "")
-                keyboard = [[InlineKeyboardButton("Get Song", url=f"https://t.me/{config.BOT_USERNAME}?start=get_song_{video_id}")]]
-                await message.edit_message_text(caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+                
+                if config.BOT_USERNAME:
+                    keyboard = [[InlineKeyboardButton("Get Song", url=f"https://t.me/{config.BOT_USERNAME}?start=get_song_{video_id}")]]
+                    await message.edit_text(caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+                else:
+                    await message.edit_text(f"{caption}\n\n⚠️ Bot username not configured. Cannot provide download link.")
     except Exception as e:
         logger.error(f"Error processing request: {e}")
         await message.edit_text("Could not find the song or an error occurred.")
@@ -365,6 +396,7 @@ async def checksub_callback_handler(update: Update, context: ContextTypes.DEFAUL
     query = update.callback_query
     await query.answer()
     video_id = query.data.split("_", 1)[1]
+    
     if await is_user_subscribed(query.from_user.id, context):
         await query.message.edit_text("Thank you for subscribing! Processing request...")
 
@@ -405,8 +437,11 @@ async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, vi
             logger.error(f"Error fetching info for PM song: {e}")
             await message.edit_text("Sorry, the song request expired or failed.")
     else:
-        keyboard = [[InlineKeyboardButton("Subscribe to Channel", url=f"https://t.me/{config.FORCE_SUB_CHANNEL.replace('@', '')}")]]
-        await update.message.reply_text("You must subscribe to our channel to get the song.", reply_markup=InlineKeyboardMarkup(keyboard))
+        if config.FORCE_SUB_CHANNEL:
+            keyboard = [[InlineKeyboardButton("Subscribe to Channel", url=f"https://t.me/{config.FORCE_SUB_CHANNEL.replace('@', '')}")]]
+            await update.message.reply_text("You must subscribe to our channel to get the song.", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await update.message.reply_text("Force subscription is not configured.")
 
 async def download_and_send_song(update: Update, application: Application, info: dict, message):
     chat_id = message.chat_id
@@ -463,7 +498,7 @@ async def download_and_send_song(update: Update, application: Application, info:
             await message.edit_text("Uploading song...")
             title, artist, duration, album = info.get('title', 'Unknown Title'), info.get('uploader', 'Unknown Artist'), info.get('duration', 0), info.get('album', None)
             caption = f"🎵 **{title}**\n👤 **{artist}**" + (f"\n💿 **{album}**" if album else "")
-            delay = application.bot_data.get('auto_delete_delay')
+            delay = application.bot_data.get('auto_delete_delay', 0)
             if delay > 0:
                 caption += f"\n\n⚠️ *This file will be deleted in {delay} minutes.*"
 
@@ -486,27 +521,43 @@ async def download_and_send_song(update: Update, application: Application, info:
 
     except Exception as e:
         logger.error(f"Error in download_and_send_song: {e}")
-        await message.edit_text("Sorry, an unexpected error occurred during download.")
+        try:
+            await message.edit_text("Sorry, an unexpected error occurred during download.")
+        except:
+            pass
     finally:
         if downloaded_mp3_path and os.path.exists(downloaded_mp3_path):
-            os.remove(downloaded_mp3_path)
+            try:
+                os.remove(downloaded_mp3_path)
+            except:
+                pass
         if thumbnail_path and os.path.exists(thumbnail_path):
-            os.remove(thumbnail_path)
+            try:
+                os.remove(thumbnail_path)
+            except:
+                pass
 
         if os.path.exists(download_path) and not os.listdir(download_path):
-            os.rmdir(download_path)
+            try:
+                os.rmdir(download_path)
+            except:
+                pass
 
 async def main() -> None:
     """Initializes, configures, and runs the bot."""
+    logger.info("Starting bot initialization...")
+    
     # --- Initialization ---
     await db.initialize_db()
     loaded_settings = await db.load_all_settings()
+    logger.info(f"Loaded settings: {loaded_settings}")
 
     # --- Application Setup ---
     application = (
         Application.builder()
         .token(config.BOT_TOKEN)
-        .post_init([start_health_check_server, start_queue_worker])
+        .post_init(start_health_check_server)
+        .post_init(start_queue_worker)
         .post_shutdown(shutdown_health_check_server)
         .build()
     )
@@ -535,12 +586,24 @@ async def main() -> None:
     application.add_handler(CallbackQueryHandler(checksub_callback_handler, pattern='^checksub_.*'))
 
     # --- Run the Bot ---
-    # This will run the bot until the user presses Ctrl-C
-    async with application:
-        await application.start()
-        await application.start_polling()
-        await asyncio.Future()  # Keep the bot running
+    logger.info("Starting bot polling...")
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling(drop_pending_updates=True)
+    
+    # Keep the bot running
+    try:
+        await asyncio.Event().wait()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Received stop signal")
+    finally:
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
