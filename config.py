@@ -16,6 +16,7 @@ FORCE_SUB_CHANNEL = os.getenv("FORCE_SUB_CHANNEL") # Must be like @username
 SPOTIPY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
 SPOTIPY_CLIENT_SECRET = os.getenv("SPOTIPY_CLIENT_SECRET")
 BOT_USERNAME = os.getenv("BOT_USERNAME") # Without @
+COOKIE_FILE_PATH = os.getenv("COOKIE_FILE_PATH") # Optional: Path to a cookies.txt file
 
 # --- Bot Settings (with safe defaults) ---
 UPLOAD_MODE = os.getenv("UPLOAD_MODE", "direct") # 'direct' or 'info'

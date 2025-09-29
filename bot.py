@@ -455,6 +455,11 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
     """
     os.makedirs(download_path, exist_ok=True)
 
+    # Add cookie file to options if it exists
+    if config.COOKIE_FILE_PATH and os.path.exists(config.COOKIE_FILE_PATH):
+        ydl_opts['cookiefile'] = config.COOKIE_FILE_PATH
+        logger.info(f"Using cookie file at: {config.COOKIE_FILE_PATH}")
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([info['webpage_url']])
 
