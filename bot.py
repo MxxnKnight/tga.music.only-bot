@@ -536,7 +536,10 @@ async def main() -> None:
 
     # --- Run the Bot ---
     # This will run the bot until the user presses Ctrl-C
-    await application.run_polling()
+    async with application:
+        await application.start()
+        await application.start_polling()
+        await asyncio.Future()  # Keep the bot running
 
 
 if __name__ == "__main__":
