@@ -363,9 +363,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, message):
     ydl_opts = {'format': 'bestaudio/best', 'noplaylist': True, 'default_search': 'ytsearch1', 'extract_flat': 'in_playlist'}
     try:
+        # Distinguish between a URL and a search query
+        url_pattern = re.compile(r'https?://\S+')
+        search_query = query if url_pattern.match(query) else f"ytsearch:{query}"
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch:{query}", download=False)
-            if 'entries' in info and info['entries']: 
+            info = ydl.extract_info(search_query, download=False)
+            if 'entries' in info and info['entries']:
                 info = info['entries'][0]
 
             video_id = info['id']
