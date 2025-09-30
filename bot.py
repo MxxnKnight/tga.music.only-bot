@@ -624,11 +624,13 @@ async def load_cookies_on_start(application: Application) -> None:
     youtube_cookies_content = os.getenv("YOUTUBE_COOKIES_CONTENT")
 
     if youtube_cookies_content:
-        logger.info("Found YOUTUBE_COOKIES_CONTENT. Writing to cookie file...")
+        logger.info("Found YOUTUBE_COOKIES_CONTENT. Processing and writing to cookie file...")
+        # Replace literal '\\n' strings with actual newline characters
+        processed_cookies = youtube_cookies_content.replace('\\n', '\n')
         try:
             os.makedirs(os.path.dirname(COOKIE_FILE), exist_ok=True)
             with open(COOKIE_FILE, "w") as f:
-                f.write(youtube_cookies_content)
+                f.write(processed_cookies)
             logger.info(f"Successfully wrote cookies to {COOKIE_FILE}")
         except Exception as e:
             logger.error(f"Failed to write cookies to {COOKIE_FILE}: {e}", exc_info=True)

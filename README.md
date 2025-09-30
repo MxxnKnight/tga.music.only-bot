@@ -169,6 +169,7 @@ The only supported method for providing cookies is through an environment variab
 2.  **Set the Environment Variable:**
     -   Create a new environment variable named `YOUTUBE_COOKIES_CONTENT`.
     -   Paste the **entire content** of your exported cookies as the value for this variable.
+    -   **Important:** If your deployment platform (like Choreo) does not support multi-line environment variables, you must replace all newlines in your cookie content with the literal string `\\n`. The bot will automatically convert these back to newlines.
 
 The bot will automatically detect this environment variable on startup, write the cookies to a temporary file, and use them for all subsequent download requests. You can check the status of the loaded cookies via the `/panel` command.
 
