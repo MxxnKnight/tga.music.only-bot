@@ -74,7 +74,7 @@ async def shutdown_health_check_server(application: Application) -> None:
 # Conversation states for Admin Panel
 SELECTING_ACTION, SETTING_DELAY, BROADCASTING_MESSAGE, BROADCASTING_CONFIRM, UPDATING_COOKIES = range(5)
 
-COOKIE_FILE = os.path.join(os.getcwd(), "cookies.txt")
+COOKIE_FILE = "/app/cookies.txt"
 
 # --- Cookie Utilities ---
 def parse_cookie_file(cookie_data: str) -> datetime.datetime | None:
