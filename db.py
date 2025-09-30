@@ -44,10 +44,6 @@ async def initialize_db():
                     cookie_data TEXT,
                     expires_at TIMESTAMP
                 );
-                CREATE TABLE IF NOT EXISTS instance_lock (
-                    lock_id INT PRIMARY KEY,
-                    locked_at TIMESTAMPTZ NOT NULL
-                );
             ''')
             # Ensure default settings are present
             for key, value in DEFAULT_SETTINGS.items():
@@ -161,40 +157,3 @@ async def delete_cookies():
             logger.info("Cookies have been deleted from the database.")
     except Exception as e:
         logger.error(f"Error deleting cookies from database: {e}")
-
-# --- Instance Locking ---
-async def acquire_lock() -> bool:
-    """
-    Tries to acquire a lock to ensure only one bot instance is polling.
-    Returns True if the lock was acquired, False otherwise.
-    """
-    if not pool:
-        logger.warning("No database pool, cannot acquire lock. Assuming lock is held.")
-        return True # If no DB, proceed as single instance.
-
-    try:
-        async with pool.acquire() as conn:
-            # The lock_id is always 1. If we can insert it, we have the lock.
-            # If it fails with a unique constraint violation, another instance has the lock.
-            await conn.execute(
-                "INSERT INTO instance_lock (lock_id, locked_at) VALUES (1, NOW())",
-            )
-            logger.info("Successfully acquired instance lock.")
-            return True
-    except asyncpg.exceptions.UniqueViolationError:
-        # This is expected if another instance is already running.
-        logger.warning("Could not acquire instance lock. Another instance is likely running.")
-        return False
-    except Exception as e:
-        logger.error(f"An unexpected error occurred while acquiring lock: {e}")
-        return False
-
-async def release_lock():
-    """Releases the instance lock."""
-    if not pool: return
-    try:
-        async with pool.acquire() as conn:
-            await conn.execute("DELETE FROM instance_lock WHERE lock_id = 1")
-            logger.info("Instance lock released.")
-    except Exception as e:
-        logger.error(f"Error releasing instance lock: {e}")
