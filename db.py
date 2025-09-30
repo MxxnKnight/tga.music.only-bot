@@ -125,13 +125,15 @@ async def set_cookies(cookie_data: str, expires_at: datetime.datetime):
     """Saves or updates the cookies in the database."""
     if not pool: return
     try:
+        # Convert timezone-aware datetime to naive before saving
+        naive_expires_at = expires_at.replace(tzinfo=None)
         async with pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO cookies (id, cookie_data, expires_at) VALUES (1, $1, $2)
                 ON CONFLICT (id) DO UPDATE SET cookie_data = $1, expires_at = $2
                 """,
-                cookie_data, expires_at
+                cookie_data, naive_expires_at
             )
             logger.info("Cookies have been updated in the database.")
     except Exception as e:

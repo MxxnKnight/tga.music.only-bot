@@ -300,15 +300,15 @@ async def set_delay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     try:
         delay = int(update.message.text)
         if delay < 0:
-            await update.message.reply_text("Please provide a non-negative number.", quote=True)
+            await update.message.reply_text("Please provide a non-negative number.")
             return SETTING_DELAY
 
         context.bot_data['auto_delete_delay'] = delay
         await db.set_setting('auto_delete_delay', delay)
 
-        await update.message.reply_text(f"✅ Auto-delete delay set to {delay} minutes." if delay > 0 else "✅ Auto-deletion disabled.", quote=True)
+        await update.message.reply_text(f"✅ Auto-delete delay set to {delay} minutes." if delay > 0 else "✅ Auto-deletion disabled.")
     except (ValueError):
-        await update.message.reply_text("Invalid number. Please send a valid number of minutes.", quote=True)
+        await update.message.reply_text("Invalid number. Please send a valid number of minutes.")
         return SETTING_DELAY
 
     # Return to main panel
@@ -332,16 +332,16 @@ async def update_cookies_handler(update: Update, context: ContextTypes.DEFAULT_T
             byte_data = await file.download_as_bytearray()
             cookie_data = byte_data.decode('utf-8')
             if not cookie_data.strip():
-                await update.message.reply_text("The provided file appears to be empty. Please try again.", quote=True)
+                await update.message.reply_text("The provided file appears to be empty. Please try again.")
                 return UPDATING_COOKIES
         elif update.message.text:
             cookie_data = update.message.text
             if not cookie_data.strip():
-                await update.message.reply_text("The provided text message is empty. Please try again.", quote=True)
+                await update.message.reply_text("The provided text message is empty. Please try again.")
                 return UPDATING_COOKIES
     except Exception as e:
         logger.error(f"Error reading cookie data from user: {e}")
-        await update.message.reply_text("Sorry, I was unable to read the provided cookie data. Please try again.", quote=True)
+        await update.message.reply_text("Sorry, I was unable to read the provided cookie data. Please try again.")
         return UPDATING_COOKIES
 
     expires_at = parse_cookie_file(cookie_data)
@@ -349,7 +349,6 @@ async def update_cookies_handler(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(
             "⚠️ **Warning**: Could not find a valid expiration date in the cookies. Please ensure they are in the Netscape format. "
             "I will still save them, but automatic expiration warnings may not work correctly.",
-            quote=True,
             parse_mode=ParseMode.MARKDOWN
         )
         # Default to 1 year from now if no date is found, so we don't spam the user.
@@ -363,7 +362,7 @@ async def update_cookies_handler(update: Update, context: ContextTypes.DEFAULT_T
     # Write to file for yt-dlp to use
     await write_cookies_to_file(cookie_data)
 
-    await update.message.reply_text("✅ Cookies updated successfully!", quote=True)
+    await update.message.reply_text("✅ Cookies updated successfully!")
 
     # Return to the cookies panel
     text, keyboard = admin_panel.get_cookies_panel(context)
