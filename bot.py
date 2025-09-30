@@ -76,50 +76,6 @@ SELECTING_ACTION, SETTING_DELAY, BROADCASTING_MESSAGE, BROADCASTING_CONFIRM = ra
 
 COOKIE_FILE = os.getenv("COOKIE_FILE_PATH", "/tmp/cookies.txt")
 
-# --- Cookie Utilities ---
-def parse_cookie_file(cookie_data: str) -> datetime.datetime | None:
-    """Parses a Netscape cookie file string to find the latest expiration date."""
-    latest_expiry = 0
-    for line in cookie_data.strip().split('\n'):
-        if line.startswith('#') or not line.strip():
-            continue
-        parts = line.split('\t')
-        if len(parts) >= 5:
-            try:
-                expiry_timestamp = int(parts[4])
-                if expiry_timestamp > latest_expiry:
-                    latest_expiry = expiry_timestamp
-            except (ValueError, IndexError):
-                continue
-
-    if latest_expiry > 0:
-        return datetime.datetime.fromtimestamp(latest_expiry, tz=datetime.timezone.utc)
-    return None
-
-async def write_cookies_to_file(cookie_data: str | None):
-    """Writes the provided cookie data to the COOKIE_FILE."""
-    try:
-        # Ensure directory exists
-        cookie_dir = os.path.dirname(COOKIE_FILE)
-        if cookie_dir:  # Only create if there's a directory path
-            os.makedirs(cookie_dir, exist_ok=True)
-
-        if cookie_data:
-            with open(COOKIE_FILE, "w") as f:
-                f.write(cookie_data)
-            logger.info(f"Successfully wrote cookies to {COOKIE_FILE}")
-            # Verify file exists and is readable
-            if os.path.exists(COOKIE_FILE) and os.access(COOKIE_FILE, os.R_OK):
-                logger.info(f"Cookie file is readable at {COOKIE_FILE}")
-            else:
-                logger.error(f"Cookie file created but not accessible at {COOKIE_FILE}")
-        else:
-            if os.path.exists(COOKIE_FILE):
-                os.remove(COOKIE_FILE)
-            logger.info(f"Removed {COOKIE_FILE} as cookie data is empty.")
-    except Exception as e:
-        logger.error(f"Failed to write to {COOKIE_FILE}: {e}", exc_info=True)
-
 # --- Job Queue Callbacks ---
 async def delete_message_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Deletes a message specified in the job context."""
@@ -130,32 +86,6 @@ async def delete_message_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         logger.error(f"Failed to delete message {job.data['message_id']} in chat {job.chat_id}: {e}")
 
-async def check_cookie_expiration_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Checks daily if cookies are about to expire and notifies admins."""
-    expires_at = context.bot_data.get('cookie_expires_at')
-    if not expires_at:
-        return
-
-    # Ensure expires_at is timezone-aware for comparison
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
-
-    now = datetime.datetime.now(datetime.timezone.utc)
-    days_left = (expires_at - now).days
-
-    # Notify if expiring within 7 days, or if already expired
-    if days_left <= 7:
-        logger.info(f"YouTube cookies are expiring in {days_left} days. Notifying admins.")
-        if days_left > 0:
-            message = f"⚠️ **Cookie Expiration Warning** ⚠️\n\nYour YouTube cookies will expire in *{days_left} day(s)*.\n\nPlease update them soon via the admin panel to avoid download interruptions."
-        else:
-            message = f"🚨 **Cookies Expired** 🚨\n\nYour YouTube cookies have expired. Downloads may fail until they are updated via the admin panel."
-
-        for admin_id in config.ADMINS:
-            try:
-                await context.bot.send_message(chat_id=int(admin_id), text=message, parse_mode=ParseMode.MARKDOWN)
-            except Exception as e:
-                logger.error(f"Failed to send expiration warning to admin {admin_id}: {e}")
 
 
 # --- Queue System ---
@@ -289,8 +219,6 @@ async def admin_panel_actions(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif data == "admin_broadcast":
         await query.edit_message_text("Please send the message you want to broadcast now.\n\nTo cancel, use /cancel.")
         return BROADCASTING_MESSAGE
-    elif data == "admin_cookies":
-        await update_and_show_panel(admin_panel.get_cookies_panel)
 
 
     return SELECTING_ACTION
@@ -690,29 +618,28 @@ async def download_and_send_song(update: Update, application: Application, info:
 
 async def load_cookies_on_start(application: Application) -> None:
     """
-    Loads cookies on startup from the YOUTUBE_COOKIES_CONTENT env var.
-    If the environment variable is not set, the bot will operate without cookies.
+    Loads cookies from the YOUTUBE_COOKIES_CONTENT env var and writes them to a file.
+    If the variable is not set, the bot will operate without cookies.
     """
     youtube_cookies_content = os.getenv("YOUTUBE_COOKIES_CONTENT")
 
     if youtube_cookies_content:
-        logger.info("Found YOUTUBE_COOKIES_CONTENT. Loading cookies from environment variable.")
-        cookie_data = youtube_cookies_content
-        expires_at = parse_cookie_file(cookie_data)
-
-        application.bot_data['cookie_data'] = cookie_data
-        application.bot_data['cookie_expires_at'] = expires_at
-        await write_cookies_to_file(cookie_data)
-
-        if os.path.exists(COOKIE_FILE):
-            logger.info(f"Successfully wrote cookies from env var to {COOKIE_FILE}")
-        else:
-            logger.error(f"Failed to write cookies from env var to {COOKIE_FILE}")
+        logger.info("Found YOUTUBE_COOKIES_CONTENT. Writing to cookie file...")
+        try:
+            os.makedirs(os.path.dirname(COOKIE_FILE), exist_ok=True)
+            with open(COOKIE_FILE, "w") as f:
+                f.write(youtube_cookies_content)
+            logger.info(f"Successfully wrote cookies to {COOKIE_FILE}")
+        except Exception as e:
+            logger.error(f"Failed to write cookies to {COOKIE_FILE}: {e}", exc_info=True)
     else:
         logger.warning("YOUTUBE_COOKIES_CONTENT not set. Bot will operate without cookies for downloads.")
-        application.bot_data['cookie_data'] = None
-        application.bot_data['cookie_expires_at'] = None
-        await write_cookies_to_file(None) # Ensure no old file is lingering
+        # Ensure no old cookie file is lingering
+        if os.path.exists(COOKIE_FILE):
+            try:
+                os.remove(COOKIE_FILE)
+            except Exception as e:
+                logger.error(f"Failed to remove old cookie file {COOKIE_FILE}: {e}")
 
 async def main() -> None:
     """Initializes, configures, and runs the bot."""
@@ -761,8 +688,6 @@ async def main() -> None:
         application.add_handler(CallbackQueryHandler(checksub_callback_handler, pattern='^checksub_.*'))
 
         # --- Schedule recurring jobs ---
-        application.job_queue.run_daily(check_cookie_expiration_job, time=datetime.time(hour=12, minute=0, tzinfo=datetime.timezone.utc), name="cookie_check")
-        logger.info("Scheduled daily cookie expiration check.")
 
         # --- Run the Bot ---
         logger.info("Starting bot polling...")

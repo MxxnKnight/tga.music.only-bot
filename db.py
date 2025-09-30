@@ -39,11 +39,6 @@ async def initialize_db():
                     key TEXT PRIMARY KEY,
                     value JSONB
                 );
-                CREATE TABLE IF NOT EXISTS cookies (
-                    id INT PRIMARY KEY,
-                    cookie_data TEXT,
-                    expires_at TIMESTAMP
-                );
             ''')
             # Ensure default settings are present
             for key, value in DEFAULT_SETTINGS.items():
@@ -117,48 +112,3 @@ async def set_setting(key: str, value):
     except Exception as e:
         logger.error(f"Error setting '{key}' in database: {e}")
 
-async def set_cookies(cookie_data: str, expires_at: datetime.datetime):
-    """Saves or updates the cookies in the database."""
-    if not pool: return
-    try:
-        # Convert timezone-aware datetime to naive before saving
-        naive_expires_at = expires_at.replace(tzinfo=None)
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO cookies (id, cookie_data, expires_at) VALUES (1, $1, $2)
-                ON CONFLICT (id) DO UPDATE SET cookie_data = $1, expires_at = $2
-                """,
-                cookie_data, naive_expires_at
-            )
-            logger.info("Cookies have been updated in the database.")
-    except Exception as e:
-        logger.error(f"Error saving cookies to database: {e}")
-
-async def get_cookies() -> tuple[str | None, datetime.datetime | None]:
-    """Retrieves cookies from the database."""
-    if not pool: return None, None
-    try:
-        async with pool.acquire() as conn:
-            record = await conn.fetchrow("SELECT cookie_data, expires_at FROM cookies WHERE id = 1")
-            if record:
-                cookie_data = record['cookie_data']
-                expires_at = record['expires_at']
-                # Make timezone-aware if naive
-                if expires_at and expires_at.tzinfo is None:
-                    expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
-                return cookie_data, expires_at
-            return None, None
-    except Exception as e:
-        logger.error(f"Error retrieving cookies from database: {e}")
-        return None, None
-
-async def delete_cookies():
-    """Deletes cookies from the database."""
-    if not pool: return
-    try:
-        async with pool.acquire() as conn:
-            await conn.execute("DELETE FROM cookies WHERE id = 1")
-            logger.info("Cookies have been deleted from the database.")
-    except Exception as e:
-        logger.error(f"Error deleting cookies from database: {e}")

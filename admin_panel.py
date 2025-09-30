@@ -11,7 +11,6 @@ def get_main_panel(context):
     keyboard = [
         [InlineKeyboardButton("📤 Upload Mode", callback_data="admin_upload_mode")],
         [InlineKeyboardButton("🔄 Queue System", callback_data="admin_queue")],
-        [InlineKeyboardButton("🍪 Manage Cookies", callback_data="admin_cookies")],
         [InlineKeyboardButton("⏱️ Auto-Delete Delay", callback_data="admin_delay")],
         [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast")],
         [InlineKeyboardButton("📊 Stats", callback_data="admin_stats")],
@@ -36,33 +35,6 @@ def get_upload_mode_panel(context):
                 callback_data="admin_set_upload_info"
             )
         ],
-        [InlineKeyboardButton("⬅️ Back", callback_data="admin_back_to_main")]
-    ]
-    return text, InlineKeyboardMarkup(keyboard)
-
-# --- Cookies Panel ---
-def get_cookies_panel(context):
-    """Generates the cookie management panel."""
-    cookie_data = context.bot_data.get('cookie_data')
-    expires_at = context.bot_data.get('cookie_expires_at')
-
-    if cookie_data and expires_at:
-        now = datetime.datetime.now(expires_at.tzinfo)
-        if expires_at > now:
-            days_left = (expires_at - now).days
-            status = f"✅ Set, expires in {days_left} days ({expires_at.strftime('%Y-%m-%d')})"
-        else:
-            status = "⚠️ Expired"
-    else:
-        status = "❌ Not set"
-
-    text = (
-        f"🍪 *Cookie Status*\n\n"
-        f"Current Status: *{status}*\n\n"
-        "Cookies are now managed exclusively via the `YOUTUBE_COOKIES_CONTENT` environment variable. "
-        "Please update your deployment settings to change the cookies."
-    )
-    keyboard = [
         [InlineKeyboardButton("⬅️ Back", callback_data="admin_back_to_main")]
     ]
     return text, InlineKeyboardMarkup(keyboard)
