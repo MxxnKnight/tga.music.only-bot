@@ -10,8 +10,8 @@ RUN apt-get update && apt-get install -y ffmpeg
 # Copy the requirements file into the container
 COPY requirements.txt .
 
-# Add this line to your Dockerfile after the `COPY requirements.txt .` line
-COPY cookies.txt .
+# Add this line to your Dockerfile, for example, right after installing ffmpeg
+COPY cookies.txt /workspace/cookies.txt
 
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
