@@ -9,7 +9,6 @@ import asyncio
 import db
 import admin_panel
 import functools
-import tempfile
 import datetime
 from datetime import timedelta
 from spotipy.oauth2 import SpotifyClientCredentials
@@ -75,6 +74,8 @@ async def shutdown_health_check_server(application: Application) -> None:
 # Conversation states for Admin Panel
 SELECTING_ACTION, SETTING_DELAY, BROADCASTING_MESSAGE, BROADCASTING_CONFIRM, UPDATING_COOKIES = range(5)
 
+COOKIE_FILE = os.path.join(os.getcwd(), "cookies.txt")
+
 # --- Cookie Utilities ---
 def parse_cookie_file(cookie_data: str) -> datetime.datetime | None:
     """Parses a Netscape cookie file string to find the latest expiration date."""
@@ -94,6 +95,20 @@ def parse_cookie_file(cookie_data: str) -> datetime.datetime | None:
     if latest_expiry > 0:
         return datetime.datetime.fromtimestamp(latest_expiry, tz=datetime.timezone.utc)
     return None
+
+async def write_cookies_to_file(cookie_data: str | None):
+    """Writes the provided cookie data to the COOKIE_FILE."""
+    try:
+        if cookie_data:
+            with open(COOKIE_FILE, "w") as f:
+                f.write(cookie_data)
+            logger.info(f"Successfully wrote cookies to {COOKIE_FILE}")
+        else:
+            if os.path.exists(COOKIE_FILE):
+                os.remove(COOKIE_FILE)
+            logger.info(f"Removed {COOKIE_FILE} as cookie data is empty.")
+    except Exception as e:
+        logger.error(f"Failed to write to {COOKIE_FILE}: {e}")
 
 # --- Job Queue Callbacks ---
 async def delete_message_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -273,6 +288,7 @@ async def admin_panel_actions(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.bot_data['cookie_data'] = None
         context.bot_data['cookie_expires_at'] = None
         await db.delete_cookies()
+        await write_cookies_to_file(None)
         await context.bot.answer_callback_query(query.id, text="✅ Cookies have been removed.", show_alert=True)
         await update_and_show_panel(admin_panel.get_cookies_panel)
 
@@ -342,6 +358,9 @@ async def update_cookies_handler(update: Update, context: ContextTypes.DEFAULT_T
     await db.set_cookies(cookie_data, expires_at)
     context.bot_data['cookie_data'] = cookie_data
     context.bot_data['cookie_expires_at'] = expires_at
+
+    # Write to file for yt-dlp to use
+    await write_cookies_to_file(cookie_data)
 
     await update.message.reply_text("✅ Cookies updated successfully!")
 
@@ -558,28 +577,23 @@ async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, vi
         else:
             await update.message.reply_text("Force subscription is not configured.")
 
-def _blocking_download_and_process(ydl_opts, info, download_path, base_filename, cookie_data=None):
+def _blocking_download_and_process(ydl_opts, info, download_path, base_filename):
     """
     Handles the blocking I/O tasks: downloading, processing, and embedding thumbnail, with enhanced logging.
     This function is designed to be run in a separate thread.
     """
     os.makedirs(download_path, exist_ok=True)
 
-    temp_cookie_file = None
-    if cookie_data:
-        try:
-            # Create a temporary file to store cookies for this download
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8', suffix='.txt') as f:
-                f.write(cookie_data)
-                temp_cookie_file = f.name
-            ydl_opts['cookiefile'] = temp_cookie_file
-            logger.info(f"Using temporary cookie file for this download: {temp_cookie_file}")
-        except Exception as e:
-            logger.error(f"Failed to create or write to temporary cookie file: {e}")
-            # Continue without cookies if the temp file fails
+    # Add cookie file to options if it exists
+    if os.path.exists(COOKIE_FILE):
+        ydl_opts['cookiefile'] = COOKIE_FILE
+        logger.info(f"Using cookie file at: {COOKIE_FILE}")
+    elif config.COOKIE_FILE_PATH and os.path.exists(config.COOKIE_FILE_PATH):
+        # Fallback to env var for backward compatibility
+        ydl_opts['cookiefile'] = config.COOKIE_FILE_PATH
+        logger.info(f"Using cookie file from env var at: {config.COOKIE_FILE_PATH}")
     else:
-        logger.info("No cookie data provided for this download.")
-
+        logger.info("No cookie file found or configured.")
 
     logger.info(f"Starting download with yt-dlp options: {ydl_opts}")
     try:
@@ -590,14 +604,6 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename,
         # Log the specific yt-dlp error and re-raise it
         logger.error(f"yt-dlp failed with a DownloadError: {e}")
         raise e # Re-raise the exception to be caught by the calling async function
-    finally:
-        # Clean up the temporary cookie file if it was created
-        if temp_cookie_file and os.path.exists(temp_cookie_file):
-            try:
-                os.remove(temp_cookie_file)
-                logger.info(f"Successfully removed temporary cookie file: {temp_cookie_file}")
-            except Exception as e:
-                logger.error(f"Failed to remove temporary cookie file {temp_cookie_file}: {e}")
 
 
     downloaded_mp3_path = os.path.join(download_path, f"{base_filename}.mp3")
@@ -672,11 +678,8 @@ async def download_and_send_song(update: Update, application: Application, info:
     try:
         await message.edit_text("Downloading...")
 
-        # Fetch the latest cookies from the database for this specific download
-        cookie_data, _ = await db.get_cookies()
-
         # Run the blocking download and processing in a separate thread
-        blocking_task = functools.partial(_blocking_download_and_process, ydl_opts, info, download_path, base_filename, cookie_data=cookie_data)
+        blocking_task = functools.partial(_blocking_download_and_process, ydl_opts, info, download_path, base_filename)
         downloaded_mp3_path, thumbnail_path, thumbnail_bytes = await loop.run_in_executor(None, blocking_task)
 
         await message.edit_text("Uploading song...")
@@ -734,17 +737,19 @@ async def download_and_send_song(update: Update, application: Application, info:
         await loop.run_in_executor(None, cleanup_task)
 
 async def load_cookies_on_start(application: Application) -> None:
-    """Loads cookies from the database into bot_data on startup."""
+    """Loads cookies from the database into bot_data and writes them to a file on startup."""
     logger.info("Loading cookies from database on startup...")
     cookie_data, expires_at = await db.get_cookies()
     if cookie_data and expires_at:
         application.bot_data['cookie_data'] = cookie_data
         application.bot_data['cookie_expires_at'] = expires_at
-        logger.info("Successfully loaded cookies from database into bot_data.")
+        await write_cookies_to_file(cookie_data)
+        logger.info("Successfully loaded and wrote cookies from database.")
     else:
         logger.info("No cookies found in database.")
         application.bot_data['cookie_data'] = None
         application.bot_data['cookie_expires_at'] = None
+        await write_cookies_to_file(None) # Ensure no old file is lingering
 
 async def main() -> None:
     """Initializes, configures, and runs the bot."""
