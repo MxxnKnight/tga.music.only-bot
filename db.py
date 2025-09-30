@@ -142,7 +142,12 @@ async def get_cookies() -> tuple[str | None, datetime.datetime | None]:
         async with pool.acquire() as conn:
             record = await conn.fetchrow("SELECT cookie_data, expires_at FROM cookies WHERE id = 1")
             if record:
-                return record['cookie_data'], record['expires_at']
+                cookie_data = record['cookie_data']
+                expires_at = record['expires_at']
+                # Make timezone-aware if naive
+                if expires_at and expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
+                return cookie_data, expires_at
             return None, None
     except Exception as e:
         logger.error(f"Error retrieving cookies from database: {e}")

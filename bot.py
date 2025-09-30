@@ -74,7 +74,7 @@ async def shutdown_health_check_server(application: Application) -> None:
 # Conversation states for Admin Panel
 SELECTING_ACTION, SETTING_DELAY, BROADCASTING_MESSAGE, BROADCASTING_CONFIRM, UPDATING_COOKIES = range(5)
 
-COOKIE_FILE = "/app/cookies.txt"
+COOKIE_FILE = os.getenv("COOKIE_FILE_PATH", "/tmp/cookies.txt")
 
 # --- Cookie Utilities ---
 def parse_cookie_file(cookie_data: str) -> datetime.datetime | None:
@@ -99,16 +99,26 @@ def parse_cookie_file(cookie_data: str) -> datetime.datetime | None:
 async def write_cookies_to_file(cookie_data: str | None):
     """Writes the provided cookie data to the COOKIE_FILE."""
     try:
+        # Ensure directory exists
+        cookie_dir = os.path.dirname(COOKIE_FILE)
+        if cookie_dir:  # Only create if there's a directory path
+            os.makedirs(cookie_dir, exist_ok=True)
+
         if cookie_data:
             with open(COOKIE_FILE, "w") as f:
                 f.write(cookie_data)
             logger.info(f"Successfully wrote cookies to {COOKIE_FILE}")
+            # Verify file exists and is readable
+            if os.path.exists(COOKIE_FILE) and os.access(COOKIE_FILE, os.R_OK):
+                logger.info(f"Cookie file is readable at {COOKIE_FILE}")
+            else:
+                logger.error(f"Cookie file created but not accessible at {COOKIE_FILE}")
         else:
             if os.path.exists(COOKIE_FILE):
                 os.remove(COOKIE_FILE)
             logger.info(f"Removed {COOKIE_FILE} as cookie data is empty.")
     except Exception as e:
-        logger.error(f"Failed to write to {COOKIE_FILE}: {e}")
+        logger.error(f"Failed to write to {COOKIE_FILE}: {e}", exc_info=True)
 
 # --- Job Queue Callbacks ---
 async def delete_message_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -587,13 +597,18 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
     # Add cookie file to options if it exists
     if os.path.exists(COOKIE_FILE):
         ydl_opts['cookiefile'] = COOKIE_FILE
-        logger.info(f"Using cookie file at: {COOKIE_FILE}")
+        logger.info(f"✅ Using cookie file at: {COOKIE_FILE}")
+        # Log file size to verify it has content
+        file_size = os.path.getsize(COOKIE_FILE)
+        logger.info(f"Cookie file size: {file_size} bytes")
     elif config.COOKIE_FILE_PATH and os.path.exists(config.COOKIE_FILE_PATH):
         # Fallback to env var for backward compatibility
         ydl_opts['cookiefile'] = config.COOKIE_FILE_PATH
-        logger.info(f"Using cookie file from env var at: {config.COOKIE_FILE_PATH}")
+        logger.info(f"✅ Using cookie file from env var at: {config.COOKIE_FILE_PATH}")
     else:
-        logger.info("No cookie file found or configured.")
+        logger.warning(f"⚠️ No cookie file found at {COOKIE_FILE}")
+        logger.warning(f"Current working directory: {os.getcwd()}")
+        logger.warning(f"Files in /tmp: {os.listdir('/tmp') if os.path.exists('/tmp') else 'N/A'}")
 
     logger.info(f"Starting download with yt-dlp options: {ydl_opts}")
     try:
@@ -741,15 +756,23 @@ async def load_cookies_on_start(application: Application) -> None:
     logger.info("Loading cookies from database on startup...")
     cookie_data, expires_at = await db.get_cookies()
     if cookie_data and expires_at:
+        # Make expires_at timezone-aware if it isn't already
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
+
         application.bot_data['cookie_data'] = cookie_data
         application.bot_data['cookie_expires_at'] = expires_at
         await write_cookies_to_file(cookie_data)
-        logger.info("Successfully loaded and wrote cookies from database.")
+
+        # Verify file was written
+        if os.path.exists(COOKIE_FILE):
+            logger.info(f"Successfully loaded and wrote cookies to {COOKIE_FILE}")
+        else:
+            logger.error(f"Failed to write cookies to {COOKIE_FILE}")
     else:
         logger.info("No cookies found in database.")
         application.bot_data['cookie_data'] = None
         application.bot_data['cookie_expires_at'] = None
-        await write_cookies_to_file(None) # Ensure no old file is lingering
 
 async def main() -> None:
     """Initializes, configures, and runs the bot."""
