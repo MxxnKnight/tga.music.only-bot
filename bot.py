@@ -757,63 +757,77 @@ async def main() -> None:
     
     # --- Initialization ---
     await db.initialize_db()
-    loaded_settings = await db.load_all_settings()
-    logger.info(f"Loaded settings: {loaded_settings}")
 
-    # --- Application Setup ---
-    application = (
-        Application.builder()
-        .token(config.BOT_TOKEN)
-        .post_init(start_health_check_server)
-        .post_init(start_queue_worker)
-        .post_init(load_cookies_on_start)
-        .post_shutdown(shutdown_health_check_server)
-        .build()
-    )
+    # --- Attempt to acquire lock ---
+    if not await db.acquire_lock():
+        logger.info("Another instance is already running. Shutting down this instance.")
+        return
 
-    # Load the persistent settings into the bot
-    application.bot_data.update(loaded_settings)
-
-    # --- Command and Message Handlers ---
-    admin_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("panel", panel_command)],
-        states={
-            SELECTING_ACTION: [CallbackQueryHandler(admin_panel_actions)],
-            SETTING_DELAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_delay_handler)],
-            BROADCASTING_MESSAGE: [MessageHandler(filters.ALL & ~filters.COMMAND, broadcast_message_handler)],
-            BROADCASTING_CONFIRM: [CallbackQueryHandler(broadcast_confirmation_handler)],
-            UPDATING_COOKIES: [MessageHandler(filters.TEXT | filters.Document.FileExtension("txt"), update_cookies_handler)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel_command)],
-        per_message=False,
-        name="admin_panel_conversation",
-        allow_reentry=True
-    )
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(admin_conv_handler)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(CallbackQueryHandler(checksub_callback_handler, pattern='^checksub_.*'))
-
-    # --- Schedule recurring jobs ---
-    application.job_queue.run_daily(check_cookie_expiration_job, time=datetime.time(hour=12, minute=0, tzinfo=datetime.timezone.utc), name="cookie_check")
-    logger.info("Scheduled daily cookie expiration check.")
-
-    # --- Run the Bot ---
-    logger.info("Starting bot polling...")
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling(drop_pending_updates=True)
-    
-    # Keep the bot running
     try:
+        loaded_settings = await db.load_all_settings()
+        logger.info(f"Loaded settings: {loaded_settings}")
+
+        # --- Application Setup ---
+        application = (
+            Application.builder()
+            .token(config.BOT_TOKEN)
+            .post_init(start_health_check_server)
+            .post_init(start_queue_worker)
+            .post_init(load_cookies_on_start)
+            .post_shutdown(shutdown_health_check_server)
+            .build()
+        )
+
+        # Load the persistent settings into the bot
+        application.bot_data.update(loaded_settings)
+
+        # --- Command and Message Handlers ---
+        admin_conv_handler = ConversationHandler(
+            entry_points=[CommandHandler("panel", panel_command)],
+            states={
+                SELECTING_ACTION: [CallbackQueryHandler(admin_panel_actions)],
+                SETTING_DELAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_delay_handler)],
+                BROADCASTING_MESSAGE: [MessageHandler(filters.ALL & ~filters.COMMAND, broadcast_message_handler)],
+                BROADCASTING_CONFIRM: [CallbackQueryHandler(broadcast_confirmation_handler)],
+                UPDATING_COOKIES: [MessageHandler(filters.TEXT | filters.Document.FileExtension("txt"), update_cookies_handler)]
+            },
+            fallbacks=[CommandHandler("cancel", cancel_command)],
+            per_message=False,
+            name="admin_panel_conversation",
+            allow_reentry=True
+        )
+
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(admin_conv_handler)
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.add_handler(CallbackQueryHandler(checksub_callback_handler, pattern='^checksub_.*'))
+
+        # --- Schedule recurring jobs ---
+        application.job_queue.run_daily(check_cookie_expiration_job, time=datetime.time(hour=12, minute=0, tzinfo=datetime.timezone.utc), name="cookie_check")
+        logger.info("Scheduled daily cookie expiration check.")
+
+        # --- Run the Bot ---
+        logger.info("Starting bot polling...")
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling(drop_pending_updates=True)
+
+        # Keep the bot running
         await asyncio.Event().wait()
+
     except (KeyboardInterrupt, SystemExit):
         logger.info("Received stop signal")
     finally:
-        await application.updater.stop()
-        await application.stop()
-        await application.shutdown()
+        # --- Release the lock on shutdown ---
+        await db.release_lock()
+
+        # Gracefully stop the application
+        if 'application' in locals() and application.updater:
+            await application.updater.stop()
+            await application.stop()
+            await application.shutdown()
+
+        logger.info("Bot has been shut down gracefully.")
 
 
 if __name__ == "__main__":
