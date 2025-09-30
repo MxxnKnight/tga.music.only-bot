@@ -757,10 +757,6 @@ async def main() -> None:
     # --- Initialization ---
     await db.initialize_db()
 
-    # --- Attempt to acquire lock ---
-    if not await db.acquire_lock():
-        logger.info("Another instance is already running. Shutting down this instance.")
-        return
 
     try:
         loaded_settings = await db.load_all_settings()
@@ -817,9 +813,6 @@ async def main() -> None:
     except (KeyboardInterrupt, SystemExit):
         logger.info("Received stop signal")
     finally:
-        # --- Release the lock on shutdown ---
-        await db.release_lock()
-
         # Gracefully stop the application
         if 'application' in locals() and application.updater:
             await application.updater.stop()
