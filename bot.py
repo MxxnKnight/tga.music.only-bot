@@ -683,8 +683,22 @@ async def main() -> None:
         logger.info("Received stop signal")
     finally:
         # Gracefully stop the application
-        if 'application' in locals() and application.updater:
-            await application.updater.stop()
+        if 'application' in locals():
+            # Cancel the queue worker task before shutting down the application
+            queue_task = application.bot_data.get('queue_worker_task')
+            if queue_task and not queue_task.done():
+                logger.info("Cancelling the queue worker task...")
+                queue_task.cancel()
+                try:
+                    # Wait for the task to acknowledge the cancellation
+                    await queue_task
+                except asyncio.CancelledError:
+                    logger.info("Queue worker task successfully cancelled.")
+                except Exception as e:
+                    logger.error(f"An error occurred during queue worker shutdown: {e}")
+
+            if application.updater:
+                await application.updater.stop()
             await application.stop()
             await application.shutdown()
 
