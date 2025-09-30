@@ -57,17 +57,12 @@ def get_cookies_panel(context):
         status = "❌ Not set"
 
     text = (
-        f"🍪 *Cookie Management*\n\n"
+        f"🍪 *Cookie Status*\n\n"
         f"Current Status: *{status}*\n\n"
-        "To update, you can send a `cookies.txt` file. However, for deployments on platforms like "
-        "Choreo, the **recommended method** is to set the `YOUTUBE_COOKIES_CONTENT` environment variable, "
-        "as this is more reliable across restarts."
+        "Cookies are now managed exclusively via the `YOUTUBE_COOKIES_CONTENT` environment variable. "
+        "Please update your deployment settings to change the cookies."
     )
     keyboard = [
-        [
-            InlineKeyboardButton("Update Cookies", callback_data="admin_update_cookies"),
-            InlineKeyboardButton("Remove Cookies", callback_data="admin_remove_cookies")
-        ],
         [InlineKeyboardButton("⬅️ Back", callback_data="admin_back_to_main")]
     ]
     return text, InlineKeyboardMarkup(keyboard)

@@ -72,7 +72,7 @@ async def shutdown_health_check_server(application: Application) -> None:
 
 
 # Conversation states for Admin Panel
-SELECTING_ACTION, SETTING_DELAY, BROADCASTING_MESSAGE, BROADCASTING_CONFIRM, UPDATING_COOKIES = range(5)
+SELECTING_ACTION, SETTING_DELAY, BROADCASTING_MESSAGE, BROADCASTING_CONFIRM = range(4)
 
 COOKIE_FILE = os.getenv("COOKIE_FILE_PATH", "/tmp/cookies.txt")
 
@@ -291,16 +291,6 @@ async def admin_panel_actions(update: Update, context: ContextTypes.DEFAULT_TYPE
         return BROADCASTING_MESSAGE
     elif data == "admin_cookies":
         await update_and_show_panel(admin_panel.get_cookies_panel)
-    elif data == "admin_update_cookies":
-        await query.edit_message_text("Please send your `cookies.txt` file or paste the cookie data as text.")
-        return UPDATING_COOKIES
-    elif data == "admin_remove_cookies":
-        context.bot_data['cookie_data'] = None
-        context.bot_data['cookie_expires_at'] = None
-        await db.delete_cookies()
-        await write_cookies_to_file(None)
-        await context.bot.answer_callback_query(query.id, text="✅ Cookies have been removed.", show_alert=True)
-        await update_and_show_panel(admin_panel.get_cookies_panel)
 
 
     return SELECTING_ACTION
@@ -323,59 +313,6 @@ async def set_delay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     # Return to main panel
     text, keyboard = admin_panel.get_main_panel(context)
-    await context.bot.edit_message_text(
-        text=text,
-        chat_id=update.effective_chat.id,
-        message_id=context.user_data['panel_message_id'],
-        reply_markup=keyboard,
-        parse_mode=ParseMode.MARKDOWN
-    )
-    return SELECTING_ACTION
-
-async def update_cookies_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handles receiving a new cookie file or text, with improved error handling."""
-    cookie_data = ""
-    try:
-        if update.message.document:
-            # The ConversationHandler filter already ensures this is a .txt file.
-            file = await context.bot.get_file(update.message.document.file_id)
-            byte_data = await file.download_as_bytearray()
-            cookie_data = byte_data.decode('utf-8')
-            if not cookie_data.strip():
-                await update.message.reply_text("The provided file appears to be empty. Please try again.")
-                return UPDATING_COOKIES
-        elif update.message.text:
-            cookie_data = update.message.text
-            if not cookie_data.strip():
-                await update.message.reply_text("The provided text message is empty. Please try again.")
-                return UPDATING_COOKIES
-    except Exception as e:
-        logger.error(f"Error reading cookie data from user: {e}")
-        await update.message.reply_text("Sorry, I was unable to read the provided cookie data. Please try again.")
-        return UPDATING_COOKIES
-
-    expires_at = parse_cookie_file(cookie_data)
-    if not expires_at:
-        await update.message.reply_text(
-            "⚠️ **Warning**: Could not find a valid expiration date in the cookies. Please ensure they are in the Netscape format. "
-            "I will still save them, but automatic expiration warnings may not work correctly.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        # Default to 1 year from now if no date is found, so we don't spam the user.
-        expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=365)
-
-    # Update db and bot_data
-    await db.set_cookies(cookie_data, expires_at)
-    context.bot_data['cookie_data'] = cookie_data
-    context.bot_data['cookie_expires_at'] = expires_at
-
-    # Write to file for yt-dlp to use
-    await write_cookies_to_file(cookie_data)
-
-    await update.message.reply_text("✅ Cookies updated successfully!")
-
-    # Return to the cookies panel
-    text, keyboard = admin_panel.get_cookies_panel(context)
     await context.bot.edit_message_text(
         text=text,
         chat_id=update.effective_chat.id,
@@ -753,8 +690,8 @@ async def download_and_send_song(update: Update, application: Application, info:
 
 async def load_cookies_on_start(application: Application) -> None:
     """
-    Loads cookies on startup, prioritizing the YOUTUBE_COOKIES_CONTENT env var.
-    If the env var is not set, it falls back to loading from the database.
+    Loads cookies on startup from the YOUTUBE_COOKIES_CONTENT env var.
+    If the environment variable is not set, the bot will operate without cookies.
     """
     youtube_cookies_content = os.getenv("YOUTUBE_COOKIES_CONTENT")
 
@@ -771,25 +708,11 @@ async def load_cookies_on_start(application: Application) -> None:
             logger.info(f"Successfully wrote cookies from env var to {COOKIE_FILE}")
         else:
             logger.error(f"Failed to write cookies from env var to {COOKIE_FILE}")
-
     else:
-        logger.info("YOUTUBE_COOKIES_CONTENT not set. Falling back to loading cookies from database.")
-        cookie_data, expires_at = await db.get_cookies()
-        if cookie_data and expires_at:
-            # The get_cookies function already makes this timezone-aware
-            application.bot_data['cookie_data'] = cookie_data
-            application.bot_data['cookie_expires_at'] = expires_at
-            await write_cookies_to_file(cookie_data)
-
-            if os.path.exists(COOKIE_FILE):
-                logger.info(f"Successfully loaded and wrote cookies from database to {COOKIE_FILE}")
-            else:
-                logger.error(f"Failed to write cookies from database to {COOKIE_FILE}")
-        else:
-            logger.info("No cookies found in database.")
-            application.bot_data['cookie_data'] = None
-            application.bot_data['cookie_expires_at'] = None
-            await write_cookies_to_file(None) # Ensure no old file is lingering
+        logger.warning("YOUTUBE_COOKIES_CONTENT not set. Bot will operate without cookies for downloads.")
+        application.bot_data['cookie_data'] = None
+        application.bot_data['cookie_expires_at'] = None
+        await write_cookies_to_file(None) # Ensure no old file is lingering
 
 async def main() -> None:
     """Initializes, configures, and runs the bot."""
@@ -825,7 +748,6 @@ async def main() -> None:
                 SETTING_DELAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_delay_handler)],
                 BROADCASTING_MESSAGE: [MessageHandler(filters.ALL & ~filters.COMMAND, broadcast_message_handler)],
                 BROADCASTING_CONFIRM: [CallbackQueryHandler(broadcast_confirmation_handler)],
-                UPDATING_COOKIES: [MessageHandler(filters.TEXT | filters.Document.FileExtension("txt"), update_cookies_handler)]
             },
             fallbacks=[CommandHandler("cancel", cancel_command)],
             per_message=False,

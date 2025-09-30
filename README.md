@@ -155,50 +155,22 @@ This method allows you to run the bot on an Android device using the Termux term
 
 ### Dealing with YouTube's "Sign In" Error (Using Cookies)
 
-Occasionally, YouTube may block downloads from servers or hosting platforms, resulting in an error like `Sign in to confirm you’re not a bot`. To solve this, you can provide the bot with a `cookies.txt` file from a browser where you are logged into YouTube.
+Occasionally, YouTube may block downloads from servers or hosting platforms, resulting in an error like `Sign in to confirm you’re not a bot`. To solve this, you must provide the bot with your YouTube cookies.
 
-**1. Export Your Cookies**
+The only supported method for providing cookies is through an environment variable. This is the most reliable approach for all deployment types, especially on stateless platforms like Choreo.
 
-The easiest way to do this is with a browser extension.
-1.  Install an extension that can export cookies in the `Netscape` format (e.g., "Cookie-Editor" for Chrome/Firefox).
-2.  Go to `youtube.com` and make sure you are logged in.
-3.  Use the extension to export all cookies for the `youtube.com` domain.
-4.  Save the exported text as a file named `cookies.txt`.
+**Steps:**
 
-**2. Configure the Bot to Use the Cookie File**
+1.  **Export Your Cookies:**
+    -   Install a browser extension that can export cookies in the Netscape format (e.g., "Cookie-Editor" for Chrome/Firefox).
+    -   Go to `youtube.com` and make sure you are logged in.
+    -   Use the extension to export all cookies for the `youtube.com` domain.
 
-You need to make this file accessible to the bot and tell the bot where to find it.
+2.  **Set the Environment Variable:**
+    -   Create a new environment variable named `YOUTUBE_COOKIES_CONTENT`.
+    -   Paste the **entire content** of your exported cookies as the value for this variable.
 
--   **For Manual/Termux Deployments:**
-    1.  Place the `cookies.txt` file in the bot's root directory.
-    2.  Set the `COOKIE_FILE_PATH` environment variable to point to it:
-        ```bash
-        export COOKIE_FILE_PATH="/path/to/your/bot/cookies.txt"
-        ```
-
--   **For Docker Deployments:**
-    1.  Place the `cookies.txt` file in the bot's root directory on your host machine.
-    2.  In your `docker-compose.yml` file, you need to mount this file into the container and set the environment variable. Add the following under the `bot` service:
-        ```yaml
-        services:
-          bot:
-            # ... other settings
-            environment:
-              - COOKIE_FILE_PATH=/app/cookies.txt # Path inside the container
-            volumes:
-              - ./cookies.txt:/app/cookies.txt # Mount the local file to the container
-        ```
-    3.  Restart your Docker container: `docker-compose up -d --build`
-
--   **For Choreo and Other Stateless Deployments (Recommended):**
-    For platforms like Choreo where the filesystem is ephemeral, the most reliable way to provide cookies is through an environment variable.
-    1.  Get the entire content of your `cookies.txt` file.
-    2.  In your deployment settings (e.g., in the Choreo console), create a new environment variable named `YOUTUBE_COOKIES_CONTENT`.
-    3.  Paste the full content of your `cookies.txt` file as the value for this variable.
-
-The bot will prioritize loading cookies from this environment variable, ensuring that every new deployment starts with the correct authentication details.
-
-The bot will now use these cookies for its download requests, making them appear as if they are coming from a logged-in user and bypassing the block.
+The bot will automatically detect this environment variable on startup, write the cookies to a temporary file, and use them for all subsequent download requests. You can check the status of the loaded cookies via the `/panel` command.
 
 ---
 
