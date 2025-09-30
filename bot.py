@@ -74,7 +74,7 @@ async def shutdown_health_check_server(application: Application) -> None:
 # Conversation states for Admin Panel
 SELECTING_ACTION, SETTING_DELAY, BROADCASTING_MESSAGE, BROADCASTING_CONFIRM = range(4)
 
-COOKIE_FILE = os.getenv("COOKIE_FILE_PATH", "/tmp/cookies.txt")
+COOKIE_FILE = "cookies.txt"
 
 # --- Job Queue Callbacks ---
 async def delete_message_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -616,32 +616,6 @@ async def download_and_send_song(update: Update, application: Application, info:
         cleanup_task = functools.partial(_blocking_cleanup, paths_to_clean)
         await loop.run_in_executor(None, cleanup_task)
 
-async def load_cookies_on_start(application: Application) -> None:
-    """
-    Loads cookies from the YOUTUBE_COOKIES_CONTENT env var and writes them to a file.
-    If the variable is not set, the bot will operate without cookies.
-    """
-    youtube_cookies_content = os.getenv("YOUTUBE_COOKIES_CONTENT")
-
-    if youtube_cookies_content:
-        logger.info("Found YOUTUBE_COOKIES_CONTENT. Processing and writing to cookie file...")
-        # Replace literal '\\n' strings with actual newline characters
-        processed_cookies = youtube_cookies_content.replace('\\n', '\n')
-        try:
-            os.makedirs(os.path.dirname(COOKIE_FILE), exist_ok=True)
-            with open(COOKIE_FILE, "w") as f:
-                f.write(processed_cookies)
-            logger.info(f"Successfully wrote cookies to {COOKIE_FILE}")
-        except Exception as e:
-            logger.error(f"Failed to write cookies to {COOKIE_FILE}: {e}", exc_info=True)
-    else:
-        logger.warning("YOUTUBE_COOKIES_CONTENT not set. Bot will operate without cookies for downloads.")
-        # Ensure no old cookie file is lingering
-        if os.path.exists(COOKIE_FILE):
-            try:
-                os.remove(COOKIE_FILE)
-            except Exception as e:
-                logger.error(f"Failed to remove old cookie file {COOKIE_FILE}: {e}")
 
 async def main() -> None:
     """Initializes, configures, and runs the bot."""
@@ -661,7 +635,6 @@ async def main() -> None:
             .token(config.BOT_TOKEN)
             .post_init(start_health_check_server)
             .post_init(start_queue_worker)
-            .post_init(load_cookies_on_start)
             .post_shutdown(shutdown_health_check_server)
             .build()
         )

@@ -155,22 +155,21 @@ This method allows you to run the bot on an Android device using the Termux term
 
 ### Dealing with YouTube's "Sign In" Error (Using Cookies)
 
-Occasionally, YouTube may block downloads from servers or hosting platforms, resulting in an error like `Sign in to confirm you’re not a bot`. To solve this, you must provide the bot with your YouTube cookies.
-
-The only supported method for providing cookies is through an environment variable. This is the most reliable approach for all deployment types, especially on stateless platforms like Choreo.
+Occasionally, YouTube may block downloads from servers or hosting platforms, resulting in an error like `Sign in to confirm you’re not a bot`. To solve this, you can provide the bot with your YouTube cookies by creating a `cookies.txt` file.
 
 **Steps:**
 
-1.  **Export Your Cookies:**
-    -   Install a browser extension that can export cookies in the Netscape format (e.g., "Cookie-Editor" for Chrome/Firefox).
+1.  **Create a `cookies.txt` file** in the root directory of this project.
+
+2.  **Export Your YouTube Cookies:**
+    -   Install a browser extension that can export cookies in the **Netscape format** (e.g., "Cookie-Editor" for Chrome/Firefox).
     -   Go to `youtube.com` and make sure you are logged in.
     -   Use the extension to export all cookies for the `youtube.com` domain.
 
-2.  **Set the Environment Variable:**
-    -   Create a new environment variable named `YOUTUBE_COOKIES_CONTENT`.
-    -   Paste the **entire content** of your exported cookies as the value for this variable.
+3.  **Paste the Content:**
+    -   Paste the entire exported cookie content into the `cookies.txt` file you created.
 
-The bot is designed to handle both single-line and multi-line cookie strings, so you can paste the content directly. It will automatically detect this environment variable on startup, write the cookies to a temporary file, and use them for all subsequent download requests.
+The bot will automatically detect and use this file for downloads if it exists.
 
 ---
 
