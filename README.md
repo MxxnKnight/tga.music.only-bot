@@ -190,6 +190,14 @@ You need to make this file accessible to the bot and tell the bot where to find 
         ```
     3.  Restart your Docker container: `docker-compose up -d --build`
 
+-   **For Choreo and Other Stateless Deployments (Recommended):**
+    For platforms like Choreo where the filesystem is ephemeral, the most reliable way to provide cookies is through an environment variable.
+    1.  Get the entire content of your `cookies.txt` file.
+    2.  In your deployment settings (e.g., in the Choreo console), create a new environment variable named `YOUTUBE_COOKIES_CONTENT`.
+    3.  Paste the full content of your `cookies.txt` file as the value for this variable.
+
+The bot will prioritize loading cookies from this environment variable, ensuring that every new deployment starts with the correct authentication details.
+
 The bot will now use these cookies for its download requests, making them appear as if they are coming from a logged-in user and bypassing the block.
 
 ---

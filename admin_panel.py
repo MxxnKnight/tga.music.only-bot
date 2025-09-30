@@ -59,7 +59,9 @@ def get_cookies_panel(context):
     text = (
         f"🍪 *Cookie Management*\n\n"
         f"Current Status: *{status}*\n\n"
-        "To update, send or forward a `cookies.txt` file or paste the cookie data as a text message."
+        "To update, you can send a `cookies.txt` file. However, for deployments on platforms like "
+        "Choreo, the **recommended method** is to set the `YOUTUBE_COOKIES_CONTENT` environment variable, "
+        "as this is more reliable across restarts."
     )
     keyboard = [
         [

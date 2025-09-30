@@ -752,27 +752,44 @@ async def download_and_send_song(update: Update, application: Application, info:
         await loop.run_in_executor(None, cleanup_task)
 
 async def load_cookies_on_start(application: Application) -> None:
-    """Loads cookies from the database into bot_data and writes them to a file on startup."""
-    logger.info("Loading cookies from database on startup...")
-    cookie_data, expires_at = await db.get_cookies()
-    if cookie_data and expires_at:
-        # Make expires_at timezone-aware if it isn't already
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
+    """
+    Loads cookies on startup, prioritizing the YOUTUBE_COOKIES_CONTENT env var.
+    If the env var is not set, it falls back to loading from the database.
+    """
+    youtube_cookies_content = os.getenv("YOUTUBE_COOKIES_CONTENT")
+
+    if youtube_cookies_content:
+        logger.info("Found YOUTUBE_COOKIES_CONTENT. Loading cookies from environment variable.")
+        cookie_data = youtube_cookies_content
+        expires_at = parse_cookie_file(cookie_data)
 
         application.bot_data['cookie_data'] = cookie_data
         application.bot_data['cookie_expires_at'] = expires_at
         await write_cookies_to_file(cookie_data)
 
-        # Verify file was written
         if os.path.exists(COOKIE_FILE):
-            logger.info(f"Successfully loaded and wrote cookies to {COOKIE_FILE}")
+            logger.info(f"Successfully wrote cookies from env var to {COOKIE_FILE}")
         else:
-            logger.error(f"Failed to write cookies to {COOKIE_FILE}")
+            logger.error(f"Failed to write cookies from env var to {COOKIE_FILE}")
+
     else:
-        logger.info("No cookies found in database.")
-        application.bot_data['cookie_data'] = None
-        application.bot_data['cookie_expires_at'] = None
+        logger.info("YOUTUBE_COOKIES_CONTENT not set. Falling back to loading cookies from database.")
+        cookie_data, expires_at = await db.get_cookies()
+        if cookie_data and expires_at:
+            # The get_cookies function already makes this timezone-aware
+            application.bot_data['cookie_data'] = cookie_data
+            application.bot_data['cookie_expires_at'] = expires_at
+            await write_cookies_to_file(cookie_data)
+
+            if os.path.exists(COOKIE_FILE):
+                logger.info(f"Successfully loaded and wrote cookies from database to {COOKIE_FILE}")
+            else:
+                logger.error(f"Failed to write cookies from database to {COOKIE_FILE}")
+        else:
+            logger.info("No cookies found in database.")
+            application.bot_data['cookie_data'] = None
+            application.bot_data['cookie_expires_at'] = None
+            await write_cookies_to_file(None) # Ensure no old file is lingering
 
 async def main() -> None:
     """Initializes, configures, and runs the bot."""
