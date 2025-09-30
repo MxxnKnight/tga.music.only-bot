@@ -74,7 +74,7 @@ async def shutdown_health_check_server(application: Application) -> None:
 # Conversation states for Admin Panel
 SELECTING_ACTION, SETTING_DELAY, BROADCASTING_MESSAGE, BROADCASTING_CONFIRM = range(4)
 
-COOKIE_FILE = "cookies.txt"
+COOKIE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
 
 # --- Job Queue Callbacks ---
 async def delete_message_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -621,6 +621,12 @@ async def main() -> None:
     """Initializes, configures, and runs the bot."""
     logger.info("Starting bot initialization...")
     
+    # --- Cookie File Check ---
+    if os.path.exists(COOKIE_FILE):
+        logger.info(f"Cookie file found at: {COOKIE_FILE}")
+    else:
+        logger.warning(f"Cookie file not found at: {COOKIE_FILE}. Downloads requiring authentication may fail.")
+
     # --- Initialization ---
     await db.initialize_db()
 

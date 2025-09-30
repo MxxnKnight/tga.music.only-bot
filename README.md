@@ -155,21 +155,14 @@ This method allows you to run the bot on an Android device using the Termux term
 
 ### Dealing with YouTube's "Sign In" Error (Using Cookies)
 
-Occasionally, YouTube may block downloads from servers or hosting platforms, resulting in an error like `Sign in to confirm you’re not a bot`. To solve this, you can provide the bot with your YouTube cookies by creating a `cookies.txt` file.
+If you encounter errors about needing to sign in, you'll need to provide YouTube cookies.
 
-**Steps:**
+**How to provide cookies:**
 
-1.  **Create a `cookies.txt` file** in the root directory of this project.
+1.  **Export your cookies:** Use a browser extension like "Cookie-Editor" to export your YouTube cookies in the **Netscape format**.
+2.  **Create and paste:** Create a file named `cookies.txt` in the root of this project and paste the exported cookie data into it.
 
-2.  **Export Your YouTube Cookies:**
-    -   Install a browser extension that can export cookies in the **Netscape format** (e.g., "Cookie-Editor" for Chrome/Firefox).
-    -   Go to `youtube.com` and make sure you are logged in.
-    -   Use the extension to export all cookies for the `youtube.com` domain.
-
-3.  **Paste the Content:**
-    -   Paste the entire exported cookie content into the `cookies.txt` file you created.
-
-The bot will automatically detect and use this file for downloads if it exists.
+The bot will automatically find and use this file if it exists.
 
 ---
 
