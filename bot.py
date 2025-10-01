@@ -564,9 +564,9 @@ async def download_and_send_song(update: Update, application: Application, info:
     base_filename = info['id']
     outtmpl = os.path.join(download_path, f"{base_filename}.%(ext)s")
 
-    # Prefer M4A audio to avoid conversion, remove postprocessors
+    # Prefer non-DASH M4A audio to avoid container issues
     base_ydl_opts = {
-        'format': 'bestaudio[ext=m4a]/bestaudio/best',
+        'format': 'bestaudio[ext=m4a][protocol!=?dash]/bestaudio[protocol!=?dash]/best',
         'outtmpl': outtmpl,
         'noplaylist': True,
         'writethumbnail': True,
