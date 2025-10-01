@@ -10,6 +10,7 @@ import db
 import admin_panel
 import functools
 import datetime
+import shutil
 from datetime import timedelta
 from spotipy.oauth2 import SpotifyClientCredentials
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -24,6 +25,8 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+FFMPEG_PATH = None
 
 # Spotify setup (with error handling for missing credentials)
 spotify = None
@@ -144,7 +147,8 @@ def get_ydl_opts(base_opts=None):
         base_opts = {}
 
     final_opts = base_opts.copy()
-    final_opts['ffmpeg_location'] = '/usr/bin/ffmpeg'
+    if FFMPEG_PATH:
+        final_opts['ffmpeg_location'] = FFMPEG_PATH
 
     if os.path.exists(COOKIE_FILE):
         final_opts['cookiefile'] = COOKIE_FILE
@@ -653,11 +657,12 @@ async def main() -> None:
     logger.info("Starting bot initialization...")
 
     # --- Ffmpeg Check ---
-    ffmpeg_path = '/usr/bin/ffmpeg'
-    if os.path.exists(ffmpeg_path):
-        logger.info(f"✅ ffmpeg found at: {ffmpeg_path}")
+    global FFMPEG_PATH
+    FFMPEG_PATH = shutil.which('ffmpeg')
+    if FFMPEG_PATH:
+        logger.info(f"✅ ffmpeg found at: {FFMPEG_PATH}")
     else:
-        logger.error(f"🚨 CRITICAL: ffmpeg not found at {ffmpeg_path}. Audio conversion will fail.")
+        logger.error(f"🚨 CRITICAL: ffmpeg not found in PATH. Audio conversion will fail.")
 
     # --- Cookie File Check ---
     if os.path.exists(COOKIE_FILE):
