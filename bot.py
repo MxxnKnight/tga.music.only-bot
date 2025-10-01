@@ -651,7 +651,14 @@ async def download_and_send_song(update: Update, application: Application, info:
 async def main() -> None:
     """Initializes, configures, and runs the bot."""
     logger.info("Starting bot initialization...")
-    
+
+    # --- Ffmpeg Check ---
+    ffmpeg_path = '/usr/bin/ffmpeg'
+    if os.path.exists(ffmpeg_path):
+        logger.info(f"✅ ffmpeg found at: {ffmpeg_path}")
+    else:
+        logger.error(f"🚨 CRITICAL: ffmpeg not found at {ffmpeg_path}. Audio conversion will fail.")
+
     # --- Cookie File Check ---
     if os.path.exists(COOKIE_FILE):
         logger.info(f"Cookie file found at: {COOKIE_FILE}")
