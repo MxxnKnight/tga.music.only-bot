@@ -87,18 +87,6 @@ async def delete_message_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error(f"Failed to delete message {job.data['message_id']} in chat {job.chat_id}: {e}")
 
 
-async def send_info_message(update: Update, info: dict, message):
-    """Sends the song info message with a 'Get Song' button."""
-    title, artist, album = info.get('title', 'Unknown Title'), info.get('uploader', 'Unknown Artist'), info.get('album', None)
-    caption = f"🎵 **{title}**\n👤 **{artist}**" + (f"\n💿 **{album}**" if album else "")
-    video_id = info['id']
-
-    if config.BOT_USERNAME:
-        keyboard = [[InlineKeyboardButton("Get Song", url=f"https://t.me/{config.BOT_USERNAME}?start=get_song_{video_id}")]]
-        await message.edit_text(caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
-    else:
-        await message.edit_text(f"{caption}\n\n⚠️ Bot username not configured. Cannot provide download link.")
-
 
 # --- Queue System ---
 download_queue = asyncio.Queue()
@@ -109,15 +97,10 @@ async def queue_worker(application: Application):
     while True:
         try:
             item = await download_queue.get()
-
-            task_type = item.get('type', 'download_song') # Default to old behavior
             update, info, message = item['update'], item['info'], item['message']
 
             try:
-                if task_type == 'download_song':
-                    await download_and_send_song(update, application, info, message)
-                elif task_type == 'send_info':
-                    await send_info_message(update, info, message)
+                await download_and_send_song(update, application, info, message)
             except Exception as e:
                 logger.error(f"Error processing item from queue: {e}", exc_info=True)
                 try:
@@ -411,26 +394,25 @@ async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYP
 
             video_id = info['id']
 
-            # --- Direct Upload Mode ---
             if context.bot_data.get('upload_mode') == 'direct':
-                if not await is_user_subscribed(update.effective_user.id, context):
+                if await is_user_subscribed(update.effective_user.id, context):
+                    if context.bot_data.get('queue_enabled'):
+                        await download_queue.put({'update': update, 'info': info, 'message': message})
+                        await message.edit_text(f"Added to queue. There are {download_queue.qsize()} song(s) ahead of you.")
+                    else:
+                        await download_and_send_song(update, context.application, info, message)
+                else:
                     keyboard = [[InlineKeyboardButton("Subscribe to Channel", url=f"https://t.me/{config.FORCE_SUB_CHANNEL.replace('@', '')}")], [InlineKeyboardButton("Try Again", callback_data=f"checksub_{video_id}")]]
                     await message.edit_text("You must subscribe to our channel to download songs directly.", reply_markup=InlineKeyboardMarkup(keyboard))
-                    return
-
-                if context.bot_data.get('queue_enabled'):
-                    await download_queue.put({'type': 'download_song', 'update': update, 'info': info, 'message': message})
-                    await message.edit_text(f"Added to queue. There are {download_queue.qsize()} song(s) ahead of you.")
-                else:
-                    await download_and_send_song(update, context.application, info, message)
-
-            # --- Info (PM) Mode ---
             else:
-                if context.bot_data.get('queue_enabled'):
-                    await download_queue.put({'type': 'send_info', 'update': update, 'info': info, 'message': message})
-                    await message.edit_text(f"Request added to queue. There are {download_queue.qsize()} song(s) ahead of you.")
+                title, artist, album = info.get('title', 'Unknown Title'), info.get('uploader', 'Unknown Artist'), info.get('album', None)
+                caption = f"🎵 **{title}**\n👤 **{artist}**" + (f"\n💿 **{album}**" if album else "")
+
+                if config.BOT_USERNAME:
+                    keyboard = [[InlineKeyboardButton("Get Song", url=f"https://t.me/{config.BOT_USERNAME}?start=get_song_{video_id}")]]
+                    await message.edit_text(caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
                 else:
-                    await send_info_message(update, info, message)
+                    await message.edit_text(f"{caption}\n\n⚠️ Bot username not configured. Cannot provide download link.")
     except Exception as e:
         logger.error(f"Error processing request: {e}")
         await message.edit_text("Could not find the song or an error occurred.")
@@ -473,15 +455,11 @@ async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, vi
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_id, download=False)
 
-            # If the queue is enabled, add the download task to the queue.
-            # Otherwise, download directly. This handles both direct PM requests
-            # and requests coming from the "Get Song" button.
             if context.bot_data.get('queue_enabled'):
-                await download_queue.put({'type': 'download_song', 'update': update, 'info': info, 'message': message})
+                await download_queue.put({'update': update, 'info': info, 'message': message})
                 await message.edit_text(f"Added to queue. There are {download_queue.qsize()} song(s) ahead of you.")
             else:
                 await download_and_send_song(update, context.application, info, message)
-
         except Exception as e:
             logger.error(f"Error fetching info for PM song: {e}", exc_info=True)
             await message.edit_text("Sorry, the song request expired or failed.")
@@ -508,7 +486,6 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
         logger.error(f"yt-dlp failed with a DownloadError: {e}")
         raise e
 
-    # Find the downloaded audio file (m4a or webm)
     downloaded_file = None
     for file in os.listdir(download_path):
         if file.startswith(base_filename) and file.split('.')[-1] in ['m4a', 'webm']:
@@ -518,7 +495,6 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
     if not downloaded_file or not os.path.exists(downloaded_file):
         raise FileNotFoundError(f"Downloaded audio file not found for base name {base_filename} in {download_path}")
 
-    # Find the thumbnail
     thumbnail_path = None
     for file in os.listdir(download_path):
         if file.startswith(base_filename) and file.split('.')[-1] in ['jpg', 'jpeg', 'png', 'webp']:
@@ -527,34 +503,41 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
 
     thumbnail_bytes = None
     if thumbnail_path and os.path.exists(thumbnail_path):
-        try:
-            # For m4a files, use MP4 instead of MP3
-            if downloaded_file.endswith('.m4a'):
-                try:
-                    audio = MP4(downloaded_file)
-                except MutagenError:
-                    # If file has no tags, mutagen will raise an error
-                    logger.warning("Could not add tags to m4a file")
-                    audio = None
-
-                if audio is not None:
-                    with open(thumbnail_path, 'rb') as art:
-                        thumbnail_bytes = art.read()
-                        audio['covr'] = [MP4Cover(thumbnail_bytes, imageformat=MP4Cover.FORMAT_JPEG)]
-                    audio.save()
-                    logger.info(f"Embedded thumbnail into {downloaded_file}")
-            else:
-                # For other formats, just load thumbnail bytes
+        if downloaded_file.endswith('.m4a'):
+            try:
+                audio = MP4(downloaded_file)
                 with open(thumbnail_path, 'rb') as art:
                     thumbnail_bytes = art.read()
-        except Exception as e:
-            logger.warning(f"Could not embed thumbnail: {e}")
-            # Still try to send thumbnail separately
-            if thumbnail_path and os.path.exists(thumbnail_path):
+                    audio['covr'] = [MP4Cover(thumbnail_bytes, imageformat=MP4Cover.FORMAT_JPEG)]
+                audio.save()
+                logger.info(f"Embedded thumbnail into {downloaded_file}")
+            except MutagenError:
+                logger.warning(f"Could not add tags to {downloaded_file}, sending thumbnail separately.")
                 with open(thumbnail_path, 'rb') as art:
                     thumbnail_bytes = art.read()
+        else:
+            with open(thumbnail_path, 'rb') as art:
+                thumbnail_bytes = art.read()
 
     return downloaded_file, thumbnail_path, thumbnail_bytes
+
+def _blocking_cleanup(paths_to_clean):
+    """
+    Handles the blocking I/O task of cleaning up files.
+    This function is designed to be run in a separate thread.
+    """
+    for path in paths_to_clean:
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+            elif os.path.isdir(path):
+                if not os.listdir(path):
+                    os.rmdir(path)
+        except Exception as e:
+            logger.error(f"Error during cleanup of {path}: {e}")
+
 
 async def download_and_send_song(update: Update, application: Application, info: dict, message):
     loop = asyncio.get_running_loop()
@@ -564,7 +547,6 @@ async def download_and_send_song(update: Update, application: Application, info:
     base_filename = info['id']
     outtmpl = os.path.join(download_path, f"{base_filename}.%(ext)s")
 
-    # Prefer non-DASH M4A audio to avoid container issues
     base_ydl_opts = {
         'format': 'bestaudio[ext=m4a][protocol!=?dash]/bestaudio[protocol!=?dash]/best',
         'outtmpl': outtmpl,
@@ -573,45 +555,68 @@ async def download_and_send_song(update: Update, application: Application, info:
     }
     ydl_opts = get_ydl_opts(base_ydl_opts)
 
-    downloaded_audio_path = None
+    downloaded_file = None
     thumbnail_path = None
 
     try:
         await message.edit_text("Downloading...")
 
-        # Run the blocking download and processing in a separate thread
         blocking_task = functools.partial(_blocking_download_and_process, ydl_opts, info, download_path, base_filename)
-        downloaded_audio_path, thumbnail_path, thumbnail_bytes = await loop.run_in_executor(None, blocking_task)
+        downloaded_file, thumbnail_path, thumbnail_bytes = await loop.run_in_executor(None, blocking_task)
 
         await message.edit_text("Uploading song...")
-        title, artist, duration, album = info.get('title', 'Unknown Title'), info.get('uploader', 'Unknown Artist'), info.get('duration', 0), info.get('album', None)
+        title = info.get('title', 'Unknown Title')
+        artist = info.get('uploader', 'Unknown Artist')
+        duration = info.get('duration', 0)
+        album = info.get('album', None)
+
         caption = f"🎵 **{title}**\n👤 **{artist}**" + (f"\n💿 **{album}**" if album else "")
         delay = int(application.bot_data.get('auto_delete_delay', 0))
         if delay > 0:
             caption += f"\n\n⚠️ *This file will be deleted in {delay} minutes.*"
 
-        with open(downloaded_audio_path, 'rb') as audio_file:
-            sent_message = await application.bot.send_audio(
-                chat_id=chat_id,
-                audio=audio_file,
-                caption=caption,
-                title=title,
-                performer=artist,
-                duration=duration,
-                parse_mode=ParseMode.MARKDOWN,
-                thumbnail=thumbnail_bytes
-            )
+        file_size = os.path.getsize(downloaded_file)
+        logger.info(f"File size: {file_size / (1024*1024):.2f} MB")
+
+        if file_size > 50 * 1024 * 1024:
+            await message.edit_text("❌ File is too large for Telegram (>50MB)")
+            return
+
+        try:
+            with open(downloaded_file, 'rb') as audio_file:
+                sent_message = await asyncio.wait_for(
+                    application.bot.send_audio(
+                        chat_id=chat_id,
+                        audio=audio_file,
+                        caption=caption,
+                        title=title,
+                        performer=artist,
+                        duration=duration,
+                        parse_mode=ParseMode.MARKDOWN,
+                        thumbnail=thumbnail_bytes,
+                        read_timeout=60,
+                        write_timeout=60,
+                        connect_timeout=60
+                    ),
+                    timeout=120
+                )
+        except asyncio.TimeoutError:
+            logger.error("Upload timed out")
+            await message.edit_text("❌ Upload timed out. The file might be too large or connection is slow.")
+            return
 
         if delay > 0:
-            application.job_queue.run_once(delete_message_job, when=timedelta(minutes=delay), data={'message_id': sent_message.message_id}, chat_id=chat_id, name=f"delete_{chat_id}_{sent_message.message_id}")
+            application.job_queue.run_once(
+                delete_message_job,
+                when=timedelta(minutes=delay),
+                data={'message_id': sent_message.message_id},
+                chat_id=chat_id
+            )
 
         await message.delete()
 
     except Exception as e:
-        # Log the full traceback for detailed diagnostics
-        logger.error("An error occurred in download_and_send_song", exc_info=True)
-
-        # Check for cookie-related errors
+        logger.error("Error in download_and_send_song", exc_info=True)
         error_message = str(e).lower()
         if "login" in error_message or "sign in" in error_message or "authentication" in error_message or "403" in error_message or "access denied" in error_message:
             logger.warning("Download failed, possibly due to expired cookies. Notifying admins.")
@@ -621,19 +626,17 @@ async def download_and_send_song(update: Update, application: Application, info:
                     await application.bot.send_message(chat_id=int(admin_id), text=notification, parse_mode=ParseMode.MARKDOWN)
                 except Exception as admin_e:
                     logger.error(f"Failed to send cookie error warning to admin {admin_id}: {admin_e}")
-
             try:
                 await message.edit_text("Sorry, a download error occurred. The admins have been notified if this looks like a cookie issue.")
             except:
                 pass
         else:
             try:
-                await message.edit_text(f"Sorry, an unexpected error occurred during download. The error was: `{e}`")
+                await message.edit_text(f"❌ Upload failed: {str(e)[:100]}")
             except:
                 pass
     finally:
-        # Run cleanup in a separate thread
-        paths_to_clean = [downloaded_audio_path, thumbnail_path, download_path]
+        paths_to_clean = [downloaded_file, thumbnail_path, download_path]
         cleanup_task = functools.partial(_blocking_cleanup, paths_to_clean)
         await loop.run_in_executor(None, cleanup_task)
 
@@ -660,6 +663,10 @@ async def main() -> None:
         application = (
             Application.builder()
             .token(config.BOT_TOKEN)
+            .read_timeout(60)
+            .write_timeout(60)
+            .connect_timeout(60)
+            .pool_timeout(60)
             .post_init(start_health_check_server)
             .post_init(start_queue_worker)
             .post_shutdown(shutdown_health_check_server)
