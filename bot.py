@@ -16,7 +16,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatMemberStatus
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
 from aiohttp import web
-from mutagen.mp4 import MP4, MP4Cover, MP4NoHeaderError
+from mutagen.mp4 import MP4, MP4Cover
+from mutagen import MutagenError
 
 # Enable logging
 logging.basicConfig(
@@ -508,13 +509,13 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
         raise e
 
     # Find the downloaded audio file (m4a or webm)
-    downloaded_audio_path = None
+    downloaded_file = None
     for file in os.listdir(download_path):
         if file.startswith(base_filename) and file.split('.')[-1] in ['m4a', 'webm']:
-            downloaded_audio_path = os.path.join(download_path, file)
+            downloaded_file = os.path.join(download_path, file)
             break
 
-    if not downloaded_audio_path or not os.path.exists(downloaded_audio_path):
+    if not downloaded_file or not os.path.exists(downloaded_file):
         raise FileNotFoundError(f"Downloaded audio file not found for base name {base_filename} in {download_path}")
 
     # Find the thumbnail
@@ -526,42 +527,34 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
 
     thumbnail_bytes = None
     if thumbnail_path and os.path.exists(thumbnail_path):
-        with open(thumbnail_path, 'rb') as art:
-            thumbnail_bytes = art.read()
-
-        # Embed thumbnail only if it's an M4A file
-        if downloaded_audio_path.endswith('.m4a'):
-            try:
-                audio = MP4(downloaded_audio_path)
-                image_format = MP4Cover.FORMAT_JPEG if thumbnail_path.lower().endswith(('.jpg', '.jpeg')) else MP4Cover.FORMAT_PNG
-                audio['covr'] = [MP4Cover(thumbnail_bytes, imageformat=image_format)]
-                audio.save()
-                logger.info(f"Embedded thumbnail into {downloaded_audio_path}")
-            except MP4NoHeaderError:
-                logger.warning(f"Could not embed thumbnail in {downloaded_audio_path}: Not a valid MP4 file.")
-            except Exception as e:
-                logger.error(f"Failed to embed thumbnail in {downloaded_audio_path}: {e}")
-
-    return downloaded_audio_path, thumbnail_path, thumbnail_bytes
-
-def _blocking_cleanup(paths_to_clean):
-    """
-    Handles the blocking I/O task of cleaning up files.
-    This function is designed to be run in a separate thread.
-    """
-    for path in paths_to_clean:
-        if not path or not os.path.exists(path):
-            continue
         try:
-            if os.path.isfile(path):
-                os.remove(path)
-            elif os.path.isdir(path):
-                # Only remove directory if it's empty
-                if not os.listdir(path):
-                    os.rmdir(path)
-        except Exception as e:
-            logger.error(f"Error during cleanup of {path}: {e}")
+            # For m4a files, use MP4 instead of MP3
+            if downloaded_file.endswith('.m4a'):
+                try:
+                    audio = MP4(downloaded_file)
+                except MutagenError:
+                    # If file has no tags, mutagen will raise an error
+                    logger.warning("Could not add tags to m4a file")
+                    audio = None
 
+                if audio is not None:
+                    with open(thumbnail_path, 'rb') as art:
+                        thumbnail_bytes = art.read()
+                        audio['covr'] = [MP4Cover(thumbnail_bytes, imageformat=MP4Cover.FORMAT_JPEG)]
+                    audio.save()
+                    logger.info(f"Embedded thumbnail into {downloaded_file}")
+            else:
+                # For other formats, just load thumbnail bytes
+                with open(thumbnail_path, 'rb') as art:
+                    thumbnail_bytes = art.read()
+        except Exception as e:
+            logger.warning(f"Could not embed thumbnail: {e}")
+            # Still try to send thumbnail separately
+            if thumbnail_path and os.path.exists(thumbnail_path):
+                with open(thumbnail_path, 'rb') as art:
+                    thumbnail_bytes = art.read()
+
+    return downloaded_file, thumbnail_path, thumbnail_bytes
 
 async def download_and_send_song(update: Update, application: Application, info: dict, message):
     loop = asyncio.get_running_loop()
