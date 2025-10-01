@@ -16,8 +16,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatMemberStatus
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
 from aiohttp import web
-from mutagen.mp4 import MP4, MP4Cover
-from mutagen import MutagenError
 
 # Enable logging
 logging.basicConfig(
@@ -472,7 +470,7 @@ async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, vi
 
 def _blocking_download_and_process(ydl_opts, info, download_path, base_filename):
     """
-    Handles the blocking I/O tasks: downloading, processing, and embedding thumbnail.
+    Handles the blocking I/O tasks: downloading and finding files.
     This function is designed to be run in a separate thread.
     """
     os.makedirs(download_path, exist_ok=True)
@@ -503,21 +501,12 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
 
     thumbnail_bytes = None
     if thumbnail_path and os.path.exists(thumbnail_path):
-        if downloaded_file.endswith('.m4a'):
-            try:
-                audio = MP4(downloaded_file)
-                with open(thumbnail_path, 'rb') as art:
-                    thumbnail_bytes = art.read()
-                    audio['covr'] = [MP4Cover(thumbnail_bytes, imageformat=MP4Cover.FORMAT_JPEG)]
-                audio.save()
-                logger.info(f"Embedded thumbnail into {downloaded_file}")
-            except MutagenError:
-                logger.warning(f"Could not add tags to {downloaded_file}, sending thumbnail separately.")
-                with open(thumbnail_path, 'rb') as art:
-                    thumbnail_bytes = art.read()
-        else:
+        try:
             with open(thumbnail_path, 'rb') as art:
                 thumbnail_bytes = art.read()
+            logger.info(f"Loaded thumbnail from {thumbnail_path}")
+        except Exception as e:
+            logger.warning(f"Could not load thumbnail: {e}")
 
     return downloaded_file, thumbnail_path, thumbnail_bytes
 
