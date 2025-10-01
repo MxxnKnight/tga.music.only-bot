@@ -586,7 +586,7 @@ async def download_and_send_song(update: Update, application: Application, info:
         await message.edit_text("Uploading song...")
         title, artist, duration, album = info.get('title', 'Unknown Title'), info.get('uploader', 'Unknown Artist'), info.get('duration', 0), info.get('album', None)
         caption = f"🎵 **{title}**\n👤 **{artist}**" + (f"\n💿 **{album}**" if album else "")
-        delay = application.bot_data.get('auto_delete_delay', 0)
+        delay = int(application.bot_data.get('auto_delete_delay', 0))
         if delay > 0:
             caption += f"\n\n⚠️ *This file will be deleted in {delay} minutes.*"
 
