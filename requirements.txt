@@ -3,4 +3,4 @@ yt-dlp
 spotipy
 asyncpg
 aiohttp
-mutagen
+mutagen==1.47.0
