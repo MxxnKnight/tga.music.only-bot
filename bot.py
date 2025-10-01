@@ -144,6 +144,7 @@ def get_ydl_opts(base_opts=None):
         base_opts = {}
 
     final_opts = base_opts.copy()
+    final_opts['ffmpeg_location'] = '/usr/bin/ffmpeg'
 
     if os.path.exists(COOKIE_FILE):
         final_opts['cookiefile'] = COOKIE_FILE
