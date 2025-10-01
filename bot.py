@@ -10,23 +10,19 @@ import db
 import admin_panel
 import functools
 import datetime
-import shutil
 from datetime import timedelta
 from spotipy.oauth2 import SpotifyClientCredentials
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatMemberStatus
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
 from aiohttp import web
-from mutagen.mp3 import MP3
-from mutagen.id3 import APIC, ID3NoHeaderError, ID3
+from mutagen.mp4 import MP4, MP4Cover, MP4NoHeaderError
 
 # Enable logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-FFMPEG_PATH = None
 
 # Spotify setup (with error handling for missing credentials)
 spotify = None
@@ -147,17 +143,10 @@ def get_ydl_opts(base_opts=None):
         base_opts = {}
 
     final_opts = base_opts.copy()
-    if FFMPEG_PATH:
-        final_opts['ffmpeg_location'] = FFMPEG_PATH
 
     if os.path.exists(COOKIE_FILE):
         final_opts['cookiefile'] = COOKIE_FILE
         logger.info(f"✅ Using cookie file at: {COOKIE_FILE}")
-        try:
-            file_size = os.path.getsize(COOKIE_FILE)
-            logger.info(f"Cookie file size: {file_size} bytes")
-        except OSError as e:
-            logger.warning(f"Could not get size of cookie file: {e}")
     else:
         logger.warning(f"⚠️ No cookie file found at {COOKIE_FILE}")
 
@@ -504,7 +493,7 @@ async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, vi
 
 def _blocking_download_and_process(ydl_opts, info, download_path, base_filename):
     """
-    Handles the blocking I/O tasks: downloading, processing, and embedding thumbnail, with enhanced logging.
+    Handles the blocking I/O tasks: downloading, processing, and embedding thumbnail.
     This function is designed to be run in a separate thread.
     """
     os.makedirs(download_path, exist_ok=True)
@@ -515,37 +504,45 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
             ydl.download([info['webpage_url']])
         logger.info("yt-dlp download completed successfully.")
     except yt_dlp.utils.DownloadError as e:
-        # Log the specific yt-dlp error and re-raise it
         logger.error(f"yt-dlp failed with a DownloadError: {e}")
-        raise e # Re-raise the exception to be caught by the calling async function
+        raise e
 
+    # Find the downloaded audio file (m4a or webm)
+    downloaded_audio_path = None
+    for file in os.listdir(download_path):
+        if file.startswith(base_filename) and file.split('.')[-1] in ['m4a', 'webm']:
+            downloaded_audio_path = os.path.join(download_path, file)
+            break
 
-    downloaded_mp3_path = os.path.join(download_path, f"{base_filename}.mp3")
+    if not downloaded_audio_path or not os.path.exists(downloaded_audio_path):
+        raise FileNotFoundError(f"Downloaded audio file not found for base name {base_filename} in {download_path}")
+
+    # Find the thumbnail
     thumbnail_path = None
     for file in os.listdir(download_path):
         if file.startswith(base_filename) and file.split('.')[-1] in ['jpg', 'jpeg', 'png', 'webp']:
             thumbnail_path = os.path.join(download_path, file)
             break
 
-    if not os.path.exists(downloaded_mp3_path):
-        raise FileNotFoundError(f"Downloaded MP3 not found at {downloaded_mp3_path}")
-
     thumbnail_bytes = None
     if thumbnail_path and os.path.exists(thumbnail_path):
-        try:
-            audio = MP3(downloaded_mp3_path, ID3=ID3)
-        except ID3NoHeaderError:
-            audio = MP3(downloaded_mp3_path)
-            audio.add_tags()
-
-        mime_type = 'image/jpeg' if thumbnail_path.endswith(('.jpg', '.jpeg')) else 'image/png'
         with open(thumbnail_path, 'rb') as art:
             thumbnail_bytes = art.read()
-            audio.tags.add(APIC(encoding=3, mime=mime_type, type=3, desc='Cover', data=thumbnail_bytes))
-        audio.save()
-        logger.info(f"Embedded thumbnail into {downloaded_mp3_path}")
 
-    return downloaded_mp3_path, thumbnail_path, thumbnail_bytes
+        # Embed thumbnail only if it's an M4A file
+        if downloaded_audio_path.endswith('.m4a'):
+            try:
+                audio = MP4(downloaded_audio_path)
+                image_format = MP4Cover.FORMAT_JPEG if thumbnail_path.lower().endswith(('.jpg', '.jpeg')) else MP4Cover.FORMAT_PNG
+                audio['covr'] = [MP4Cover(thumbnail_bytes, imageformat=image_format)]
+                audio.save()
+                logger.info(f"Embedded thumbnail into {downloaded_audio_path}")
+            except MP4NoHeaderError:
+                logger.warning(f"Could not embed thumbnail in {downloaded_audio_path}: Not a valid MP4 file.")
+            except Exception as e:
+                logger.error(f"Failed to embed thumbnail in {downloaded_audio_path}: {e}")
+
+    return downloaded_audio_path, thumbnail_path, thumbnail_bytes
 
 def _blocking_cleanup(paths_to_clean):
     """
@@ -574,20 +571,16 @@ async def download_and_send_song(update: Update, application: Application, info:
     base_filename = info['id']
     outtmpl = os.path.join(download_path, f"{base_filename}.%(ext)s")
 
+    # Prefer M4A audio to avoid conversion, remove postprocessors
     base_ydl_opts = {
-        'format': 'bestaudio/best',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '320'
-        }],
+        'format': 'bestaudio[ext=m4a]/bestaudio/best',
         'outtmpl': outtmpl,
         'noplaylist': True,
-        'writethumbnail': True
+        'writethumbnail': True,
     }
     ydl_opts = get_ydl_opts(base_ydl_opts)
 
-    downloaded_mp3_path = None
+    downloaded_audio_path = None
     thumbnail_path = None
 
     try:
@@ -595,7 +588,7 @@ async def download_and_send_song(update: Update, application: Application, info:
 
         # Run the blocking download and processing in a separate thread
         blocking_task = functools.partial(_blocking_download_and_process, ydl_opts, info, download_path, base_filename)
-        downloaded_mp3_path, thumbnail_path, thumbnail_bytes = await loop.run_in_executor(None, blocking_task)
+        downloaded_audio_path, thumbnail_path, thumbnail_bytes = await loop.run_in_executor(None, blocking_task)
 
         await message.edit_text("Uploading song...")
         title, artist, duration, album = info.get('title', 'Unknown Title'), info.get('uploader', 'Unknown Artist'), info.get('duration', 0), info.get('album', None)
@@ -604,7 +597,7 @@ async def download_and_send_song(update: Update, application: Application, info:
         if delay > 0:
             caption += f"\n\n⚠️ *This file will be deleted in {delay} minutes.*"
 
-        with open(downloaded_mp3_path, 'rb') as audio_file:
+        with open(downloaded_audio_path, 'rb') as audio_file:
             sent_message = await application.bot.send_audio(
                 chat_id=chat_id,
                 audio=audio_file,
@@ -647,7 +640,7 @@ async def download_and_send_song(update: Update, application: Application, info:
                 pass
     finally:
         # Run cleanup in a separate thread
-        paths_to_clean = [downloaded_mp3_path, thumbnail_path, download_path]
+        paths_to_clean = [downloaded_audio_path, thumbnail_path, download_path]
         cleanup_task = functools.partial(_blocking_cleanup, paths_to_clean)
         await loop.run_in_executor(None, cleanup_task)
 
@@ -655,14 +648,6 @@ async def download_and_send_song(update: Update, application: Application, info:
 async def main() -> None:
     """Initializes, configures, and runs the bot."""
     logger.info("Starting bot initialization...")
-
-    # --- Ffmpeg Check ---
-    global FFMPEG_PATH
-    FFMPEG_PATH = shutil.which('ffmpeg')
-    if FFMPEG_PATH:
-        logger.info(f"✅ ffmpeg found at: {FFMPEG_PATH}")
-    else:
-        logger.error(f"🚨 CRITICAL: ffmpeg not found in PATH. Audio conversion will fail.")
 
     # --- Cookie File Check ---
     if os.path.exists(COOKIE_FILE):
