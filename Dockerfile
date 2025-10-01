@@ -6,6 +6,8 @@ WORKDIR /app
 
 # Install ffmpeg
 RUN apt-get update && apt-get install -y ffmpeg
+# Verify ffmpeg installation
+RUN which ffmpeg
 
 # Copy the requirements file into the container
 COPY requirements.txt .

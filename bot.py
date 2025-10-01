@@ -87,6 +87,18 @@ async def delete_message_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error(f"Failed to delete message {job.data['message_id']} in chat {job.chat_id}: {e}")
 
 
+async def send_info_message(update: Update, info: dict, message):
+    """Sends the song info message with a 'Get Song' button."""
+    title, artist, album = info.get('title', 'Unknown Title'), info.get('uploader', 'Unknown Artist'), info.get('album', None)
+    caption = f"🎵 **{title}**\n👤 **{artist}**" + (f"\n💿 **{album}**" if album else "")
+    video_id = info['id']
+
+    if config.BOT_USERNAME:
+        keyboard = [[InlineKeyboardButton("Get Song", url=f"https://t.me/{config.BOT_USERNAME}?start=get_song_{video_id}")]]
+        await message.edit_text(caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    else:
+        await message.edit_text(f"{caption}\n\n⚠️ Bot username not configured. Cannot provide download link.")
+
 
 # --- Queue System ---
 download_queue = asyncio.Queue()
@@ -97,12 +109,17 @@ async def queue_worker(application: Application):
     while True:
         try:
             item = await download_queue.get()
+
+            task_type = item.get('type', 'download_song') # Default to old behavior
             update, info, message = item['update'], item['info'], item['message']
 
             try:
-                await download_and_send_song(update, application, info, message)
+                if task_type == 'download_song':
+                    await download_and_send_song(update, application, info, message)
+                elif task_type == 'send_info':
+                    await send_info_message(update, info, message)
             except Exception as e:
-                logger.error(f"Error processing item from queue: {e}")
+                logger.error(f"Error processing item from queue: {e}", exc_info=True)
                 try:
                     await message.edit_text("Sorry, an error occurred while processing your request from the queue.")
                 except:
@@ -113,7 +130,7 @@ async def queue_worker(application: Application):
             logger.info("Queue worker cancelled")
             break
         except Exception as e:
-            logger.error(f"Unexpected error in queue worker: {e}")
+            logger.error(f"Unexpected error in queue worker: {e}", exc_info=True)
 
 async def start_queue_worker(application: Application) -> None:
     """Starts the queue worker as a background task."""
@@ -399,25 +416,26 @@ async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYP
 
             video_id = info['id']
 
+            # --- Direct Upload Mode ---
             if context.bot_data.get('upload_mode') == 'direct':
-                if await is_user_subscribed(update.effective_user.id, context):
-                    if context.bot_data.get('queue_enabled'):
-                        await download_queue.put({'update': update, 'info': info, 'message': message})
-                        await message.edit_text(f"Added to queue. There are {download_queue.qsize()} song(s) ahead of you.")
-                    else:
-                        await download_and_send_song(update, context.application, info, message)
-                else:
+                if not await is_user_subscribed(update.effective_user.id, context):
                     keyboard = [[InlineKeyboardButton("Subscribe to Channel", url=f"https://t.me/{config.FORCE_SUB_CHANNEL.replace('@', '')}")], [InlineKeyboardButton("Try Again", callback_data=f"checksub_{video_id}")]]
                     await message.edit_text("You must subscribe to our channel to download songs directly.", reply_markup=InlineKeyboardMarkup(keyboard))
-            else:
-                title, artist, album = info.get('title', 'Unknown Title'), info.get('uploader', 'Unknown Artist'), info.get('album', None)
-                caption = f"🎵 **{title}**\n👤 **{artist}**" + (f"\n💿 **{album}**" if album else "")
-                
-                if config.BOT_USERNAME:
-                    keyboard = [[InlineKeyboardButton("Get Song", url=f"https://t.me/{config.BOT_USERNAME}?start=get_song_{video_id}")]]
-                    await message.edit_text(caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+                    return
+
+                if context.bot_data.get('queue_enabled'):
+                    await download_queue.put({'type': 'download_song', 'update': update, 'info': info, 'message': message})
+                    await message.edit_text(f"Added to queue. There are {download_queue.qsize()} song(s) ahead of you.")
                 else:
-                    await message.edit_text(f"{caption}\n\n⚠️ Bot username not configured. Cannot provide download link.")
+                    await download_and_send_song(update, context.application, info, message)
+
+            # --- Info (PM) Mode ---
+            else:
+                if context.bot_data.get('queue_enabled'):
+                    await download_queue.put({'type': 'send_info', 'update': update, 'info': info, 'message': message})
+                    await message.edit_text(f"Request added to queue. There are {download_queue.qsize()} song(s) ahead of you.")
+                else:
+                    await send_info_message(update, info, message)
     except Exception as e:
         logger.error(f"Error processing request: {e}")
         await message.edit_text("Could not find the song or an error occurred.")
@@ -460,13 +478,17 @@ async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, vi
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_id, download=False)
 
+            # If the queue is enabled, add the download task to the queue.
+            # Otherwise, download directly. This handles both direct PM requests
+            # and requests coming from the "Get Song" button.
             if context.bot_data.get('queue_enabled'):
-                await download_queue.put({'update': update, 'info': info, 'message': message})
+                await download_queue.put({'type': 'download_song', 'update': update, 'info': info, 'message': message})
                 await message.edit_text(f"Added to queue. There are {download_queue.qsize()} song(s) ahead of you.")
             else:
                 await download_and_send_song(update, context.application, info, message)
+
         except Exception as e:
-            logger.error(f"Error fetching info for PM song: {e}")
+            logger.error(f"Error fetching info for PM song: {e}", exc_info=True)
             await message.edit_text("Sorry, the song request expired or failed.")
     else:
         if config.FORCE_SUB_CHANNEL:
