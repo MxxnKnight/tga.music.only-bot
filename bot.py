@@ -14,8 +14,7 @@ from datetime import timedelta
 from spotipy.oauth2 import SpotifyClientCredentials
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatMemberStatus
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, ConversationHandler, Defaults
-from telegram.error import TimedOut
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
 from aiohttp import web
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen import MutagenError
@@ -585,20 +584,22 @@ async def download_and_send_song(update: Update, application: Application, info:
 
         try:
             with open(downloaded_file, 'rb') as audio_file:
-                sent_message = await application.bot.send_audio(
-                    chat_id=chat_id,
-                    audio=audio_file,
-                    caption=caption,
-                    title=title,
-                    performer=artist,
-                    duration=duration,
-                    parse_mode=ParseMode.MARKDOWN,
-                    thumbnail=thumbnail_bytes,
-                    timeout=180  # Use a single timeout parameter
+                sent_message = await asyncio.wait_for(
+                    application.bot.send_audio(
+                        chat_id=chat_id,
+                        audio=audio_file,
+                        caption=caption,
+                        title=title,
+                        performer=artist,
+                        duration=duration,
+                        parse_mode=ParseMode.MARKDOWN,
+                        thumbnail=thumbnail_bytes
+                    ),
+                    timeout=120
                 )
-        except TimedOut:
-            logger.error("Upload timed out after 180 seconds")
-            await message.edit_text("❌ Upload timed out. The file might be too large or the connection is slow.")
+        except asyncio.TimeoutError:
+            logger.error("Upload timed out")
+            await message.edit_text("❌ Upload timed out. The file might be too large or connection is slow.")
             return
 
         if delay > 0:
@@ -656,16 +657,9 @@ async def main() -> None:
         logger.info(f"Loaded settings: {loaded_settings}")
 
         # --- Application Setup ---
-        defaults = Defaults(
-            read_timeout=120,
-            write_timeout=120,
-            connect_timeout=60,
-            pool_timeout=120
-        )
         application = (
             Application.builder()
             .token(config.BOT_TOKEN)
-            .defaults(defaults)
             .post_init(start_health_check_server)
             .post_init(start_queue_worker)
             .post_shutdown(shutdown_health_check_server)
