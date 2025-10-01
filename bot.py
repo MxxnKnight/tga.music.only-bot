@@ -121,6 +121,26 @@ async def start_queue_worker(application: Application) -> None:
     application.bot_data['queue_worker_task'] = task
 
 # --- Admin and Helper Functions ---
+def get_ydl_opts(base_opts=None):
+    """Creates yt-dlp options, adding cookie file if it exists."""
+    if base_opts is None:
+        base_opts = {}
+
+    final_opts = base_opts.copy()
+
+    if os.path.exists(COOKIE_FILE):
+        final_opts['cookiefile'] = COOKIE_FILE
+        logger.info(f"✅ Using cookie file at: {COOKIE_FILE}")
+        try:
+            file_size = os.path.getsize(COOKIE_FILE)
+            logger.info(f"Cookie file size: {file_size} bytes")
+        except OSError as e:
+            logger.warning(f"Could not get size of cookie file: {e}")
+    else:
+        logger.warning(f"⚠️ No cookie file found at {COOKIE_FILE}")
+
+    return final_opts
+
 def is_admin(user_id: int) -> bool:
     """Check if a user is an admin."""
     return str(user_id) in config.ADMINS
@@ -365,7 +385,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await process_song_request(update, context, query, message)
 
 async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, message):
-    ydl_opts = {'format': 'bestaudio/best', 'noplaylist': True, 'default_search': 'ytsearch1'}
+    base_ydl_opts = {'format': 'bestaudio/best', 'noplaylist': True, 'default_search': 'ytsearch1'}
+    ydl_opts = get_ydl_opts(base_ydl_opts)
     try:
         # Distinguish between a URL and a search query
         url_pattern = re.compile(r'https?://\S+')
@@ -410,7 +431,8 @@ async def checksub_callback_handler(update: Update, context: ContextTypes.DEFAUL
         await query.message.edit_text("Thank you for subscribing! Processing request...")
 
         # Re-fetch info since it's not cached
-        ydl_opts = {'format': 'bestaudio/best', 'noplaylist': True}
+        base_ydl_opts = {'format': 'bestaudio/best', 'noplaylist': True}
+        ydl_opts = get_ydl_opts(base_ydl_opts)
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_id, download=False)
@@ -432,7 +454,8 @@ async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, vi
     if await is_user_subscribed(update.effective_user.id, context):
         message = await update.message.reply_text("Processing your request...")
 
-        ydl_opts = {'format': 'bestaudio/best', 'noplaylist': True}
+        base_ydl_opts = {'format': 'bestaudio/best', 'noplaylist': True}
+        ydl_opts = get_ydl_opts(base_ydl_opts)
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_id, download=False)
@@ -458,22 +481,6 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
     This function is designed to be run in a separate thread.
     """
     os.makedirs(download_path, exist_ok=True)
-
-    # Add cookie file to options if it exists
-    if os.path.exists(COOKIE_FILE):
-        ydl_opts['cookiefile'] = COOKIE_FILE
-        logger.info(f"✅ Using cookie file at: {COOKIE_FILE}")
-        # Log file size to verify it has content
-        file_size = os.path.getsize(COOKIE_FILE)
-        logger.info(f"Cookie file size: {file_size} bytes")
-    elif config.COOKIE_FILE_PATH and os.path.exists(config.COOKIE_FILE_PATH):
-        # Fallback to env var for backward compatibility
-        ydl_opts['cookiefile'] = config.COOKIE_FILE_PATH
-        logger.info(f"✅ Using cookie file from env var at: {config.COOKIE_FILE_PATH}")
-    else:
-        logger.warning(f"⚠️ No cookie file found at {COOKIE_FILE}")
-        logger.warning(f"Current working directory: {os.getcwd()}")
-        logger.warning(f"Files in /tmp: {os.listdir('/tmp') if os.path.exists('/tmp') else 'N/A'}")
 
     logger.info(f"Starting download with yt-dlp options: {ydl_opts}")
     try:
@@ -540,7 +547,7 @@ async def download_and_send_song(update: Update, application: Application, info:
     base_filename = info['id']
     outtmpl = os.path.join(download_path, f"{base_filename}.%(ext)s")
 
-    ydl_opts = {
+    base_ydl_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
@@ -551,6 +558,7 @@ async def download_and_send_song(update: Update, application: Application, info:
         'noplaylist': True,
         'writethumbnail': True
     }
+    ydl_opts = get_ydl_opts(base_ydl_opts)
 
     downloaded_mp3_path = None
     thumbnail_path = None
