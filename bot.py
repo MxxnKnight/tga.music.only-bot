@@ -660,6 +660,10 @@ async def main() -> None:
         application = (
             Application.builder()
             .token(config.BOT_TOKEN)
+            .connect_timeout(60)
+            .read_timeout(180)
+            .write_timeout(180)
+            .pool_timeout(60)
             .post_init(start_health_check_server)
             .post_init(start_queue_worker)
             .post_shutdown(shutdown_health_check_server)
