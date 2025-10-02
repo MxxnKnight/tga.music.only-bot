@@ -15,6 +15,7 @@ from spotipy.oauth2 import SpotifyClientCredentials
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatMemberStatus
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
+from telegram.error import TimedOut
 from aiohttp import web
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen import MutagenError
@@ -583,23 +584,19 @@ async def download_and_send_song(update: Update, application: Application, info:
             return
 
         try:
-            with open(downloaded_file, 'rb') as audio_file:
-                sent_message = await asyncio.wait_for(
-                    application.bot.send_audio(
-                        chat_id=chat_id,
-                        audio=audio_file,
-                        caption=caption,
-                        title=title,
-                        performer=artist,
-                        duration=duration,
-                        parse_mode=ParseMode.MARKDOWN,
-                        thumbnail=thumbnail_bytes
-                    ),
-                    timeout=120
-                )
-        except asyncio.TimeoutError:
-            logger.error("Upload timed out")
-            await message.edit_text("❌ Upload timed out. The file might be too large or connection is slow.")
+            sent_message = await application.bot.send_audio(
+                chat_id=chat_id,
+                audio=downloaded_file,
+                caption=caption,
+                title=title,
+                performer=artist,
+                duration=duration,
+                parse_mode=ParseMode.MARKDOWN,
+                thumbnail=thumbnail_bytes
+            )
+        except TimedOut:
+            logger.error(f"Upload timed out for {downloaded_file} based on application-level settings.")
+            await message.edit_text("❌ Upload timed out. The file might be too large or the connection is slow.")
             return
 
         if delay > 0:
