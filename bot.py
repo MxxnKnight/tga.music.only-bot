@@ -540,6 +540,25 @@ def _blocking_cleanup(paths_to_clean):
             logger.error(f"Error during cleanup of {path}: {e}")
 
 
+async def upload_with_progress(coro, message):
+    """Awaits a coroutine while showing a progress animation."""
+    task = asyncio.create_task(coro)
+    animation = ["|", "/", "-", "\\"]
+    i = 0
+    while not task.done():
+        try:
+            # Edit the message to show the next animation frame
+            await message.edit_text(f"Uploading... {animation[i % 4]}")
+            i += 1
+            # Wait for a short period before the next update
+            await asyncio.sleep(0.5)
+        except Exception:
+            # If editing fails (e.g., message deleted), stop the progress bar
+            break
+
+    # Await the final result of the task, which will re-raise any exceptions
+    return await task
+
 async def download_and_send_song(update: Update, application: Application, info: dict, message):
     loop = asyncio.get_running_loop()
     chat_id = message.chat_id
@@ -565,7 +584,6 @@ async def download_and_send_song(update: Update, application: Application, info:
         blocking_task = functools.partial(_blocking_download_and_process, ydl_opts, info, download_path, base_filename)
         downloaded_file, thumbnail_path, thumbnail_bytes = await loop.run_in_executor(None, blocking_task)
 
-        await message.edit_text("Uploading song...")
         title = info.get('title', 'Unknown Title')
         artist = info.get('uploader', 'Unknown Artist')
         duration = info.get('duration', 0)
@@ -583,17 +601,25 @@ async def download_and_send_song(update: Update, application: Application, info:
             await message.edit_text("❌ File is too large for Telegram (>50MB)")
             return
 
+        # Read the file into memory as bytes
+        with open(downloaded_file, 'rb') as audio_file:
+            audio_bytes = audio_file.read()
+
+        # Define the upload coroutine
+        send_coro = application.bot.send_audio(
+            chat_id=chat_id,
+            audio=audio_bytes,
+            caption=caption,
+            title=title,
+            performer=artist,
+            duration=duration,
+            parse_mode=ParseMode.MARKDOWN,
+            thumbnail=thumbnail_bytes
+        )
+
         try:
-            sent_message = await application.bot.send_audio(
-                chat_id=chat_id,
-                audio=downloaded_file,
-                caption=caption,
-                title=title,
-                performer=artist,
-                duration=duration,
-                parse_mode=ParseMode.MARKDOWN,
-                thumbnail=thumbnail_bytes
-            )
+            # Upload with the progress bar
+            sent_message = await upload_with_progress(send_coro, message)
         except TimedOut:
             logger.error(f"Upload timed out for {downloaded_file} based on application-level settings.")
             await message.edit_text("❌ Upload timed out. The file might be too large or the connection is slow.")
@@ -611,8 +637,13 @@ async def download_and_send_song(update: Update, application: Application, info:
 
     except Exception as e:
         logger.error("Error in download_and_send_song", exc_info=True)
-        error_message = str(e).lower()
-        if "login" in error_message or "sign in" in error_message or "authentication" in error_message or "403" in error_message or "access denied" in error_message:
+        # Avoid showing raw TimedOut error to user if it bubbles up
+        if isinstance(e, TimedOut):
+            error_text = "The upload timed out."
+        else:
+            error_text = str(e)
+
+        if "login" in error_text.lower() or "sign in" in error_text.lower() or "authentication" in error_text.lower() or "403" in error_text.lower() or "access denied" in error_text.lower():
             logger.warning("Download failed, possibly due to expired cookies. Notifying admins.")
             notification = "🚨 **Download Failed: Possible Cookie Issue** 🚨\n\nA download failed with an authentication error. Your cookies may have expired or be invalid. Please update them via the admin panel."
             for admin_id in config.ADMINS:
@@ -626,7 +657,7 @@ async def download_and_send_song(update: Update, application: Application, info:
                 pass
         else:
             try:
-                await message.edit_text(f"❌ Upload failed: {str(e)[:100]}")
+                await message.edit_text(f"❌ Upload failed: {error_text[:100]}")
             except:
                 pass
     finally:
