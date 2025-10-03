@@ -379,7 +379,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await process_song_request(update, context, query, message)
 
 async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, message):
-    base_ydl_opts = {'format': 'bestaudio/best', 'noplaylist': True, 'default_search': 'ytsearch1'}
+    base_ydl_opts = {'format': 'bestaudio[ext=m4a]/bestaudio', 'noplaylist': True, 'default_search': 'ytsearch1'}
     ydl_opts = get_ydl_opts(base_ydl_opts)
     try:
         # Distinguish between a URL and a search query
@@ -425,7 +425,7 @@ async def checksub_callback_handler(update: Update, context: ContextTypes.DEFAUL
         await query.message.edit_text("Thank you for subscribing! Processing request...")
 
         # Re-fetch info since it's not cached
-        base_ydl_opts = {'format': 'bestaudio/best', 'noplaylist': True}
+        base_ydl_opts = {'format': 'bestaudio[ext=m4a]/bestaudio', 'noplaylist': True}
         ydl_opts = get_ydl_opts(base_ydl_opts)
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -448,7 +448,7 @@ async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, vi
     if await is_user_subscribed(update.effective_user.id, context):
         message = await update.message.reply_text("Processing your request...")
 
-        base_ydl_opts = {'format': 'bestaudio/best', 'noplaylist': True}
+        base_ydl_opts = {'format': 'bestaudio[ext=m4a]/bestaudio', 'noplaylist': True}
         ydl_opts = get_ydl_opts(base_ydl_opts)
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -471,7 +471,7 @@ async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, vi
 
 def _blocking_download_and_process(ydl_opts, info, download_path, base_filename):
     """
-    Handles the blocking I/O tasks: downloading, processing, and embedding thumbnail.
+    Handles the blocking I/O tasks: downloading, processing, and reading files.
     This function is designed to be run in a separate thread.
     """
     os.makedirs(download_path, exist_ok=True)
@@ -494,6 +494,9 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
     if not downloaded_file or not os.path.exists(downloaded_file):
         raise FileNotFoundError(f"Downloaded audio file not found for base name {base_filename} in {download_path}")
 
+    with open(downloaded_file, 'rb') as f:
+        audio_bytes = f.read()
+
     thumbnail_path = None
     for file in os.listdir(download_path):
         if file.startswith(base_filename) and file.split('.')[-1] in ['jpg', 'jpeg', 'png', 'webp']:
@@ -506,7 +509,7 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
             thumbnail_bytes = art.read()
         logger.info(f"Read thumbnail into bytes from {thumbnail_path}")
 
-    return downloaded_file, thumbnail_path, thumbnail_bytes
+    return downloaded_file, thumbnail_path, thumbnail_bytes, audio_bytes
 
 def _blocking_cleanup(paths_to_clean):
     """
@@ -535,7 +538,7 @@ async def download_and_send_song(update: Update, application: Application, info:
     outtmpl = os.path.join(download_path, f"{base_filename}.%(ext)s")
 
     base_ydl_opts = {
-        'format': 'bestaudio/best',
+        'format': 'bestaudio[ext=m4a]/bestaudio',
         'outtmpl': outtmpl,
         'noplaylist': True,
         'writethumbnail': True,
@@ -549,7 +552,7 @@ async def download_and_send_song(update: Update, application: Application, info:
         await message.edit_text("Downloading...")
 
         blocking_task = functools.partial(_blocking_download_and_process, ydl_opts, info, download_path, base_filename)
-        downloaded_file, thumbnail_path, thumbnail_bytes = await loop.run_in_executor(None, blocking_task)
+        downloaded_file, thumbnail_path, thumbnail_bytes, audio_bytes = await loop.run_in_executor(None, blocking_task)
 
         await message.edit_text("Uploading song...")
         title = info.get('title', 'Unknown Title')
@@ -572,7 +575,7 @@ async def download_and_send_song(update: Update, application: Application, info:
         try:
             sent_message = await application.bot.send_audio(
                 chat_id=chat_id,
-                audio=downloaded_file,
+                audio=audio_bytes,
                 caption=caption,
                 title=title,
                 performer=artist,
