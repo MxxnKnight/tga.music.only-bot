@@ -17,8 +17,6 @@ from telegram.constants import ParseMode, ChatMemberStatus
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
 from telegram.error import TimedOut
 from aiohttp import web
-from mutagen.mp4 import MP4, MP4Cover
-from mutagen import MutagenError
 
 # Enable logging
 logging.basicConfig(
@@ -504,21 +502,9 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
 
     thumbnail_bytes = None
     if thumbnail_path and os.path.exists(thumbnail_path):
-        if downloaded_file.endswith('.m4a'):
-            try:
-                audio = MP4(downloaded_file)
-                with open(thumbnail_path, 'rb') as art:
-                    thumbnail_bytes = art.read()
-                    audio['covr'] = [MP4Cover(thumbnail_bytes, imageformat=MP4Cover.FORMAT_JPEG)]
-                audio.save()
-                logger.info(f"Embedded thumbnail into {downloaded_file}")
-            except MutagenError as e:
-                logger.warning(f"Could not embed thumbnail due to mutagen error: {e}. Sending thumbnail separately.")
-                with open(thumbnail_path, 'rb') as art:
-                    thumbnail_bytes = art.read()
-        else:
-            with open(thumbnail_path, 'rb') as art:
-                thumbnail_bytes = art.read()
+        with open(thumbnail_path, 'rb') as art:
+            thumbnail_bytes = art.read()
+        logger.info(f"Read thumbnail into bytes from {thumbnail_path}")
 
     return downloaded_file, thumbnail_path, thumbnail_bytes
 
