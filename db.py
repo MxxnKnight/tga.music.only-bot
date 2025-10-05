@@ -19,7 +19,7 @@ async def initialize_db():
     Initializes the MongoDB connection, gets the database and collections,
     and ensures necessary indexes are created.
     """
-    global client, db, users_collection, settings_collection
+    global client, db, users_collection, settings_collection, file_cache_collection
 
     if not MONGODB_URI:
         raise ValueError("FATAL: MONGODB_URI environment variable is not set.")
@@ -28,12 +28,8 @@ async def initialize_db():
         # Create a single, shared client instance
         client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI)
 
-        # The database name can be specified in the URI, or you can get it like this.
-        # Render's connection string includes the database name.
-        db = client.get_default_database()
-        if not db:
-            # Fallback if the database name is not in the URI
-            db = client["music_bot"]
+        # Explicitly get the database by name.
+        db = client["music_bot"]
 
         users_collection = db["users"]
         settings_collection = db["settings"]
