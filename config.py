@@ -5,7 +5,7 @@ import os
 # These must be set in the environment, or the bot will fail to start.
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALLOWED_GROUP_ID = os.getenv("ALLOWED_GROUP_ID")
-DATABASE_URL = os.getenv("DATABASE_URL")
+MONGODB_URI = os.getenv("MONGODB_URI")
 
 # Admin configuration
 ADMINS_STRING = os.getenv("ADMINS")
@@ -38,7 +38,7 @@ if not BOT_TOKEN:
     raise ValueError("FATAL: BOT_TOKEN environment variable is not set.")
 if not ALLOWED_GROUP_ID:
     raise ValueError("FATAL: ALLOWED_GROUP_ID environment variable is not set.")
-if not DATABASE_URL:
-    raise ValueError("FATAL: DATABASE_URL environment variable is not set.")
+if not MONGODB_URI:
+    raise ValueError("FATAL: MONGODB_URI environment variable is not set.")
 if not ADMINS:
     raise ValueError("FATAL: ADMINS environment variable is not set or is empty.")

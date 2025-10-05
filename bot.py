@@ -348,7 +348,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await process_song_request(update, context, query, message)
 
 async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, message):
-    base_ydl_opts = {'format': 'bestaudio[ext=m4a]/bestaudio', 'noplaylist': True, 'default_search': 'ytsearch1'}
+    base_ydl_opts = {'format': 'bestaudio[ext=m4a]/bestaudio', 'noplaylist': True, 'default_search': 'ytsearch'}
     ydl_opts = get_ydl_opts(base_ydl_opts)
     try:
         # Distinguish between a URL and a search query

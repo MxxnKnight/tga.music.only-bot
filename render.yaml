@@ -1,19 +1,16 @@
 # render.yaml
 # This file configures the services for deploying the Telegram bot on Render.
-# It defines a PostgreSQL database and a web service to run the bot.
+# It defines a MongoDB database and a worker service to run the bot.
 
-services:
-  # 1. PostgreSQL Database
-  # This service creates a managed PostgreSQL database for the bot.
-  - type: pserv
-    name: music-bot-db
+databases:
+  # 1. MongoDB Database
+  # This service creates a managed MongoDB database for the bot.
+  - name: music-bot-db
     # The 'plan' can be 'free' for testing or a paid plan for production.
     plan: free
-    # The version of PostgreSQL to use.
-    postgresMajorVersion: 14
-    # The name of the database that will be created.
     databaseName: music_bot
 
+services:
   # 2. Telegram Bot Service
   # This service runs the bot as a background worker using the existing Dockerfile.
   - type: worker
@@ -22,13 +19,15 @@ services:
     plan: free
     # Tells Render to use the Dockerfile in the root of the repository.
     dockerfilePath: ./Dockerfile
+    # The command to start the bot.
+    startCommand: python bot.py
     # Sets up the environment variables for the bot.
     envVars:
-      # The DATABASE_URL is automatically created by Render and injected
+      # The MONGODB_URI is automatically created by Render and injected
       # from the database service defined above.
-      - key: DATABASE_URL
+      - key: MONGODB_URI
         fromService:
-          type: pserv
+          type: db
           name: music-bot-db
           property: connectionString
       # --- Secrets ---
