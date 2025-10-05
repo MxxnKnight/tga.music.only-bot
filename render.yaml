@@ -1,0 +1,58 @@
+# render.yaml
+# This file configures the services for deploying the Telegram bot on Render.
+# It defines a PostgreSQL database and a web service to run the bot.
+
+services:
+  # 1. PostgreSQL Database
+  # This service creates a managed PostgreSQL database for the bot.
+  - type: pserv
+    name: music-bot-db
+    # The 'plan' can be 'free' for testing or a paid plan for production.
+    plan: free
+    # The version of PostgreSQL to use.
+    postgresMajorVersion: 14
+    # The name of the database that will be created.
+    databaseName: music_bot
+
+  # 2. Telegram Bot Service
+  # This service runs the bot using the existing Dockerfile.
+  # It's defined as a 'web' service because it has a health check endpoint.
+  - type: web
+    name: telegram-music-bot
+    # The 'plan' can be 'free' for testing or a paid plan for production.
+    plan: free
+    # Tells Render to use the Dockerfile in the root of the repository.
+    dockerfilePath: ./Dockerfile
+    # Sets up the environment variables for the bot.
+    envVars:
+      # The DATABASE_URL is automatically created by Render and injected
+      # from the database service defined above.
+      - key: DATABASE_URL
+        fromService:
+          type: pserv
+          name: music-bot-db
+          property: connectionString
+      # --- Secrets ---
+      # These are sensitive values that you must set in the Render dashboard.
+      # Create an "Environment Group" in Render and add these keys.
+      - key: BOT_TOKEN
+        sync: false # Set this in the Render dashboard
+      - key: ADMINS
+        sync: false # Set this in the Render dashboard (e.g., "12345,67890")
+      - key: ALLOWED_GROUP_ID
+        sync: false # Set this in the Render dashboard
+      - key: BOT_USERNAME
+        sync: false # Set this in the Render dashboard (e.g., "MyMusicBot")
+      # --- Optional Secrets ---
+      # Set these if you use the corresponding features.
+      - key: FORCE_SUB_CHANNEL
+        sync: false # Optional: Set this in the Render dashboard (e.g., "@mychannel")
+      - key: SPOTIPY_CLIENT_ID
+        sync: false # Optional: Set this for Spotify integration
+      - key: SPOTIPY_CLIENT_SECRET
+        sync: false # Optional: Set this for Spotify integration
+    # Health Check Endpoint
+    # Render uses this to ensure the bot is running correctly.
+    healthCheckPath: /healthz
+    # Set the number of instances. '1' is sufficient for this bot.
+    numInstances: 1
