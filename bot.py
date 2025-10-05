@@ -15,8 +15,7 @@ from spotipy.oauth2 import SpotifyClientCredentials
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatMemberStatus
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
-from telegram.error import TimedOut
-from aiohttp import web
+from telegram.error import TimedOut, BadRequest
 
 # Enable logging
 logging.basicConfig(
@@ -39,36 +38,6 @@ if config.SPOTIPY_CLIENT_ID and config.SPOTIPY_CLIENT_SECRET:
         logger.warning(f"Spotify initialization failed: {e}")
 else:
     logger.warning("Spotify credentials not provided. Spotify links will not work.")
-
-# --- Health Check Server (aiohttp) ---
-async def health_check_handler(request: web.Request) -> web.Response:
-    """AIOHTTP handler for the health check endpoint."""
-    return web.Response(text="OK")
-
-async def start_health_check_server(application: Application) -> None:
-    """Starts the aiohttp web server for health checks."""
-    port = int(os.environ.get('PORT', 8080))
-    app = web.Application()
-    app.add_routes([web.get('/healthz', health_check_handler)])
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-
-    site = web.TCPSite(runner, host='0.0.0.0', port=port)
-    await site.start()
-
-    logger.info(f"Health check server running on port {port}")
-    # Store runner and site in bot_data to be accessible for cleanup
-    application.bot_data['aiohttp_runner'] = runner
-    application.bot_data['aiohttp_site'] = site
-
-async def shutdown_health_check_server(application: Application) -> None:
-    """Gracefully shuts down the aiohttp web server."""
-    runner = application.bot_data.get('aiohttp_runner')
-    if runner:
-        logger.info("Shutting down health check server...")
-        await runner.cleanup()
-
 
 # Conversation states for Admin Panel
 SELECTING_ACTION, SETTING_DELAY, BROADCASTING_MESSAGE, BROADCASTING_CONFIRM = range(4)
@@ -388,10 +357,24 @@ async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYP
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(search_query, download=False)
-            if 'entries' in info and info['entries']:
-                info = info['entries'][0]
 
-            video_id = info['id']
+            # Handle different types of results from yt-dlp
+            if 'entries' in info:
+                # It's a playlist (e.g., from a search)
+                if info['entries']:
+                    # Playlist has videos, take the first one
+                    info = info['entries'][0]
+                else:
+                    # Playlist is empty (no search results)
+                    await message.edit_text("Sorry, I couldn't find a song with that name.")
+                    return
+            # If 'entries' is not in info, it's a direct link to a single video,
+            # so the info object is already correct. We do nothing.
+
+            video_id = info.get('id')
+            if not video_id:
+                await message.edit_text("Sorry, I could not get a valid ID for the song.")
+                return
 
             if context.bot_data.get('upload_mode') == 'direct':
                 if await is_user_subscribed(update.effective_user.id, context):
@@ -549,12 +532,20 @@ async def download_and_send_song(update: Update, application: Application, info:
     thumbnail_path = None
 
     try:
-        await message.edit_text("Downloading...")
+        try:
+            await message.edit_text("Downloading...")
+        except BadRequest:
+            logger.warning(f"Could not edit message {message.message_id} in chat {chat_id}, it was likely deleted.")
+            pass
 
         blocking_task = functools.partial(_blocking_download_and_process, ydl_opts, info, download_path, base_filename)
         downloaded_file, thumbnail_path, thumbnail_bytes, audio_bytes = await loop.run_in_executor(None, blocking_task)
 
-        await message.edit_text("Uploading song...")
+        try:
+            await message.edit_text("Uploading song...")
+        except BadRequest:
+            logger.warning(f"Could not edit message {message.message_id} in chat {chat_id}, it was likely deleted.")
+            pass
         title = info.get('title', 'Unknown Title')
         artist = info.get('uploader', 'Unknown Artist')
         duration = info.get('duration', 0)
@@ -596,7 +587,11 @@ async def download_and_send_song(update: Update, application: Application, info:
                 chat_id=chat_id
             )
 
-        await message.delete()
+        try:
+            await message.delete()
+        except BadRequest:
+            logger.warning(f"Could not delete message {message.message_id} in chat {chat_id}, it was likely already deleted.")
+            pass
 
     except Exception as e:
         logger.error("Error in download_and_send_song", exc_info=True)
@@ -650,9 +645,7 @@ async def main() -> None:
             .read_timeout(600)
             .write_timeout(600)
             .pool_timeout(60)
-            .post_init(start_health_check_server)
             .post_init(start_queue_worker)
-            .post_shutdown(shutdown_health_check_server)
             .build()
         )
 

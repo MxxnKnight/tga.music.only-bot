@@ -15,9 +15,8 @@ services:
     databaseName: music_bot
 
   # 2. Telegram Bot Service
-  # This service runs the bot using the existing Dockerfile.
-  # It's defined as a 'web' service because it has a health check endpoint.
-  - type: web
+  # This service runs the bot as a background worker using the existing Dockerfile.
+  - type: worker
     name: telegram-music-bot
     # The 'plan' can be 'free' for testing or a paid plan for production.
     plan: free
@@ -51,8 +50,3 @@ services:
         sync: false # Optional: Set this for Spotify integration
       - key: SPOTIPY_CLIENT_SECRET
         sync: false # Optional: Set this for Spotify integration
-    # Health Check Endpoint
-    # Render uses this to ensure the bot is running correctly.
-    healthCheckPath: /healthz
-    # Set the number of instances. '1' is sufficient for this bot.
-    numInstances: 1
