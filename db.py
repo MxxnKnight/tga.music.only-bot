@@ -12,6 +12,7 @@ client = None
 db = None
 users_collection = None
 settings_collection = None
+file_cache_collection = None
 
 async def initialize_db():
     """
@@ -36,12 +37,15 @@ async def initialize_db():
 
         users_collection = db["users"]
         settings_collection = db["settings"]
+        file_cache_collection = db["file_cache"]
 
         # --- Create Indexes ---
         # Create a unique index on user_id to prevent duplicate users
         await users_collection.create_index("user_id", unique=True)
         # Create a unique index on the setting key to prevent duplicate settings
         await settings_collection.create_index("key", unique=True)
+        # Create a unique index on the video_id for fast cache lookups
+        await file_cache_collection.create_index("video_id", unique=True)
 
         # --- Seed Default Settings ---
         # This ensures that on the first run, the bot has the necessary settings.
@@ -142,3 +146,34 @@ async def load_all_settings() -> dict:
     except Exception as e:
         logger.error(f"Failed to load settings: {e}", exc_info=True)
         return {}
+
+async def add_to_cache(video_id: str, file_id: str):
+    """
+    Saves a video's file_id to the cache for future use.
+    """
+    if not file_cache_collection:
+        logger.error("Database not initialized. Call initialize_db() first.")
+        return
+    try:
+        await file_cache_collection.update_one(
+            {'video_id': video_id},
+            {'$set': {'file_id': file_id}},
+            upsert=True
+        )
+    except Exception as e:
+        logger.error(f"Failed to cache file_id for video {video_id}: {e}", exc_info=True)
+
+async def get_from_cache(video_id: str) -> str | None:
+    """
+    Retrieves a cached file_id for a given video_id.
+    Returns the file_id if found, otherwise None.
+    """
+    if not file_cache_collection:
+        logger.error("Database not initialized. Call initialize_db() first.")
+        return None
+    try:
+        doc = await file_cache_collection.find_one({'video_id': video_id})
+        return doc.get('file_id') if doc else None
+    except Exception as e:
+        logger.error(f"Failed to get file_id from cache for video {video_id}: {e}", exc_info=True)
+        return None

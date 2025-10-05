@@ -348,7 +348,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await process_song_request(update, context, query, message)
 
 async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, message):
-    base_ydl_opts = {'format': 'bestaudio[ext=m4a]/bestaudio', 'noplaylist': True, 'default_search': 'ytsearch'}
+    base_ydl_opts = {'format': 'bestaudio[ext=m4a]/bestaudio', 'noplaylist': True, 'default_search': 'ytsearch1'}
     ydl_opts = get_ydl_opts(base_ydl_opts)
     try:
         # Distinguish between a URL and a search query
@@ -515,6 +515,46 @@ def _blocking_cleanup(paths_to_clean):
 async def download_and_send_song(update: Update, application: Application, info: dict, message):
     loop = asyncio.get_running_loop()
     chat_id = message.chat_id
+    video_id = info.get('id')
+
+    # --- Check Cache First ---
+    if video_id:
+        cached_file_id = await db.get_from_cache(video_id)
+        if cached_file_id:
+            logger.info(f"Found cached file_id {cached_file_id} for video {video_id}. Sending from cache.")
+            try:
+                title = info.get('title', 'Unknown Title')
+                artist = info.get('uploader', 'Unknown Artist')
+                duration = info.get('duration', 0)
+                album = info.get('album', None)
+                caption = f"🎵 **{title}**\n👤 **{artist}**" + (f"\n💿 **{album}**" if album else "")
+                delay = int(application.bot_data.get('auto_delete_delay', 0))
+                if delay > 0:
+                    caption += f"\n\n⚠️ *This file will be deleted in {delay} minutes.*"
+
+                sent_message = await application.bot.send_audio(
+                    chat_id=chat_id,
+                    audio=cached_file_id,
+                    caption=caption,
+                    title=title,
+                    performer=artist,
+                    duration=duration,
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+
+                if delay > 0:
+                    application.job_queue.run_once(
+                        delete_message_job,
+                        when=timedelta(minutes=delay),
+                        data={'message_id': sent_message.message_id},
+                        chat_id=chat_id
+                    )
+
+                await message.delete()
+                return
+            except Exception as e:
+                logger.error(f"Failed to send from cache with file_id {cached_file_id}: {e}. Falling back to download.", exc_info=True)
+
     download_path = os.path.join('downloads', str(chat_id))
 
     base_filename = info['id']
@@ -574,6 +614,10 @@ async def download_and_send_song(update: Update, application: Application, info:
                 parse_mode=ParseMode.MARKDOWN,
                 thumbnail=thumbnail_bytes
             )
+            # Add the file_id to the cache for future use
+            await db.add_to_cache(video_id=info['id'], file_id=sent_message.audio.file_id)
+            logger.info(f"Cached file_id {sent_message.audio.file_id} for video {info['id']}")
+
         except TimedOut:
             logger.error(f"Upload timed out for {downloaded_file} after 600 seconds.")
             await message.edit_text("❌ Upload timed out. The file might be too large or the connection is slow.")
