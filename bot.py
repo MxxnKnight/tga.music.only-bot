@@ -10,12 +10,16 @@ import db
 import admin_panel
 import functools
 import datetime
+import time
 from datetime import timedelta
 from spotipy.oauth2 import SpotifyClientCredentials
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatMemberStatus
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
-from telegram.error import TimedOut, BadRequest
+from telegram.error import TimedOut, BadRequest, RetryAfter
+
+# --- Global Variables ---
+last_update_time = 0
 
 # Enable logging
 logging.basicConfig(
@@ -103,6 +107,14 @@ def get_ydl_opts(base_opts=None):
         logger.warning(f"⚠️ No cookie file found at {COOKIE_FILE}")
 
     return final_opts
+
+def generate_progress_bar(percentage):
+    """Generates a text-based progress bar."""
+    if percentage is None:
+        return ""
+    filled_length = int(percentage / 10)
+    bar = '█' * filled_length + '░' * (10 - filled_length)
+    return f"[{bar}] {percentage:.1f}%"
 
 def is_admin(user_id: int) -> bool:
     """Check if a user is an admin."""
@@ -457,6 +469,8 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
     Handles the blocking I/O tasks: downloading, processing, and reading files.
     This function is designed to be run in a separate thread.
     """
+    # Ensure the download directory exists.
+    # This is especially important for the RAM disk, which might not persist.
     os.makedirs(download_path, exist_ok=True)
 
     logger.info(f"Starting download with yt-dlp options: {ydl_opts}")
@@ -555,16 +569,74 @@ async def download_and_send_song(update: Update, application: Application, info:
             except Exception as e:
                 logger.error(f"Failed to send from cache with file_id {cached_file_id}: {e}. Falling back to download.", exc_info=True)
 
-    download_path = os.path.join('downloads', str(chat_id))
+    # --- Use RAM disk if available, otherwise fallback to local disk ---
+    if os.path.exists("/dev/shm") and os.access("/dev/shm", os.W_OK):
+        download_path = os.path.join('/dev/shm', str(chat_id))
+        logger.info("Using RAM disk for download: /dev/shm")
+    else:
+        download_path = os.path.join('downloads', str(chat_id))
+        logger.info("RAM disk not available, using local disk for download.")
 
     base_filename = info['id']
     outtmpl = os.path.join(download_path, f"{base_filename}.%(ext)s")
+    last_update_time = 0
+
+    async def edit_message_safe(text):
+        """Safely edit the message, handling potential rate limits."""
+        try:
+            await message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
+        except RetryAfter as e:
+            logger.warning(f"Rate limited. Retrying after {e.retry_after} seconds.")
+            await asyncio.sleep(e.retry_after)
+            await edit_message_safe(text) # Retry the edit
+        except BadRequest as e:
+            # Ignore "message is not modified" error, log others
+            if "not modified" not in str(e):
+                logger.warning(f"Could not edit message {message.message_id}: {e}")
+
+    def progress_hook(d):
+        nonlocal last_update_time
+        if d['status'] == 'downloading':
+            current_time = time.time()
+            if current_time - last_update_time < 2:
+                return
+
+            percentage = d.get('_percent_str', '0%')
+            # remove ANSI escape codes
+            percentage = re.sub(r'\x1b\[[0-9;]*m', '', percentage).replace('%', '')
+            try:
+                percentage = float(percentage)
+            except (ValueError, TypeError):
+                return
+
+            speed = d.get('speed', 0)
+            if speed is None: speed = 0
+            speed_str = f"{speed / 1024 / 1024:.2f} MB/s"
+            total_bytes = d.get('total_bytes')
+            if total_bytes is None:
+                total_bytes_str = "Unknown"
+            else:
+                total_bytes_str = f"{total_bytes / 1024 / 1024:.2f} MB"
+
+            progress_bar = generate_progress_bar(percentage)
+            text = (
+                f"**Downloading...**\n"
+                f"`{progress_bar}`\n"
+                f"**Progress:** {percentage:.1f}%\n"
+                f"**Size:** {total_bytes_str}\n"
+                f"**Speed:** {speed_str}"
+            )
+
+            future = asyncio.run_coroutine_threadsafe(edit_message_safe(text), loop)
+            future.result() # Wait for the coroutine to finish
+            last_update_time = current_time
 
     base_ydl_opts = {
         'format': 'bestaudio[ext=m4a]/bestaudio',
         'outtmpl': outtmpl,
         'noplaylist': True,
         'writethumbnail': True,
+        'progress_hooks': [progress_hook],
     }
     ydl_opts = get_ydl_opts(base_ydl_opts)
 
@@ -572,20 +644,12 @@ async def download_and_send_song(update: Update, application: Application, info:
     thumbnail_path = None
 
     try:
-        try:
-            await message.edit_text("Downloading...")
-        except BadRequest:
-            logger.warning(f"Could not edit message {message.message_id} in chat {chat_id}, it was likely deleted.")
-            pass
+        await edit_message_safe("Initializing download...")
 
         blocking_task = functools.partial(_blocking_download_and_process, ydl_opts, info, download_path, base_filename)
         downloaded_file, thumbnail_path, thumbnail_bytes, audio_bytes = await loop.run_in_executor(None, blocking_task)
 
-        try:
-            await message.edit_text("Uploading song...")
-        except BadRequest:
-            logger.warning(f"Could not edit message {message.message_id} in chat {chat_id}, it was likely deleted.")
-            pass
+        await edit_message_safe("Download complete. Now uploading...")
         title = info.get('title', 'Unknown Title')
         artist = info.get('uploader', 'Unknown Artist')
         duration = info.get('duration', 0)
