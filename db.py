@@ -69,7 +69,7 @@ async def add_user(user_id: int):
     Adds a new user to the database if they don't already exist.
     This is an idempotent operation.
     """
-    if not users_collection:
+    if users_collection is None:
         logger.error("Database not initialized. Call initialize_db() first.")
         return
     try:
@@ -86,7 +86,7 @@ async def get_all_users() -> list[int]:
     """
     Retrieves a list of all user IDs from the database.
     """
-    if not users_collection:
+    if users_collection is None:
         logger.error("Database not initialized. Call initialize_db() first.")
         return []
     try:
@@ -100,7 +100,7 @@ async def get_users_count() -> int:
     """
     Returns the total number of users in the database.
     """
-    if not users_collection:
+    if users_collection is None:
         logger.error("Database not initialized. Call initialize_db() first.")
         return 0
     try:
@@ -113,7 +113,7 @@ async def set_setting(key: str, value):
     """
     Sets a new value for a given setting or creates it if it doesn't exist.
     """
-    if not settings_collection:
+    if settings_collection is None:
         logger.error("Database not initialized. Call initialize_db() first.")
         return
     try:
@@ -129,7 +129,7 @@ async def load_all_settings() -> dict:
     """
     Loads all settings from the database into a dictionary.
     """
-    if not settings_collection:
+    if settings_collection is None:
         logger.error("Database not initialized. Call initialize_db() first.")
         return {}
     settings = {}
