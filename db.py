@@ -147,7 +147,7 @@ async def add_to_cache(video_id: str, file_id: str):
     """
     Saves a video's file_id to the cache for future use.
     """
-    if not file_cache_collection:
+    if file_cache_collection is None:
         logger.error("Database not initialized. Call initialize_db() first.")
         return
     try:
@@ -164,7 +164,7 @@ async def get_from_cache(video_id: str) -> str | None:
     Retrieves a cached file_id for a given video_id.
     Returns the file_id if found, otherwise None.
     """
-    if not file_cache_collection:
+    if file_cache_collection is None:
         logger.error("Database not initialized. Call initialize_db() first.")
         return None
     try:
