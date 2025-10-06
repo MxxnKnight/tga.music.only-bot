@@ -75,15 +75,16 @@ async def delete_message_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 download_queue = asyncio.Queue()
 
 async def queue_worker(application: Application):
-    """Worker that processes the download queue."""
+    """Worker that processes the song request queue."""
     logger.info("Queue worker started.")
     while True:
         try:
             item = await download_queue.get()
-            update, info, message = item['update'], item['info'], item['message']
+            update, context, query, message = item['update'], item['context'], item['query'], item['message']
 
             try:
-                await download_and_send_song(update, application, info, message)
+                # The worker now executes the full song processing logic for a queued request
+                await _execute_song_request(update, context, query, message)
             except Exception as e:
                 logger.error(f"Error processing item from queue: {e}", exc_info=True)
                 try:
@@ -355,47 +356,122 @@ async def start_panel_callback_handler(update: Update, context: ContextTypes.DEF
         await update_and_show_panel(start_panel.get_tos_panel)
 
 
+async def refresh_subscription_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handles the 'Refresh' button after a user is asked to subscribe.
+    """
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    if await is_user_subscribed(user_id, context):
+        await query.answer("Thank you for subscribing!")
+        # Delete the "Please subscribe" message
+        await query.message.delete()
+
+        pending_query = context.user_data.pop('pending_query', None)
+        if pending_query:
+            # Re-initiate the song request process
+            status_message = await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=f"Processing your request for: `{pending_query}`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            await _initiate_song_processing(update, context, pending_query, status_message)
+        else:
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="I couldn't find your original request. Please send it again."
+            )
+    else:
+        await query.answer("You are still not subscribed. Please join the channel and try again.", show_alert=True)
+
+
 # --- Song Handling Logic ---
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
-    if update.effective_chat.type == 'private': 
-        await db.add_user(user_id)
-    if str(update.effective_chat.id) != config.ALLOWED_GROUP_ID and update.effective_chat.type != 'private': 
-        return
-    if update.effective_chat.type == 'private':
-        await update.message.reply_text("Sorry, you can't request songs directly in PM. Please use the allowed group.")
-        return
-    
-    message_text = update.message.text
+async def _initiate_song_processing(update: Update, context: ContextTypes.DEFAULT_TYPE, query_text: str, status_message):
+    """
+    Handles the core logic of processing a song query, including link parsing.
+    This function can be called from different handlers.
+    """
     url_pattern = re.compile(r'https?://\S+')
-    query = message_text
-    message = await update.message.reply_text("Processing...")
-    
-    if url_pattern.match(message_text):
-        if "spotify.com" in message_text:
+    query = query_text
+
+    if url_pattern.match(query_text):
+        if "spotify.com" in query_text:
             if not spotify:
-                await message.edit_text("Spotify integration is not configured.")
+                await status_message.edit_text("Spotify integration is not configured.")
                 return
             try:
-                track = spotify.track(message_text)
+                track = spotify.track(query_text)
                 query = f"{track['name']} {track['artists'][0]['name']}"
-                await message.edit_text("🎧 Downloading from Spotify...")
+                await status_message.edit_text("🎧 Processing Spotify link...")
             except Exception as e:
                 logger.error(f"Spotify error: {e}")
-                await message.edit_text("Could not process the Spotify link.")
+                await status_message.edit_text("Could not process the Spotify link.")
                 return
-        elif "jiosaavn.com" in message_text:
-            await message.edit_text("🎧 Downloading from Saavn...")
-            song_name_match = re.search(r'/song/[^/]+/([^/?]+)', message_text)
+        elif "jiosaavn.com" in query_text:
+            await status_message.edit_text("🎧 Processing Saavn link...")
+            song_name_match = re.search(r'/song/[^/]+/([^/?]+)', query_text)
             if song_name_match:
                 query = song_name_match.group(1).replace('-', ' ')
             else:
-                await message.edit_text("Could not extract info from Saavn link.")
+                await status_message.edit_text("Could not extract info from Saavn link.")
                 return
     
-    await process_song_request(update, context, query, message)
+    await process_song_request(update, context, query, status_message)
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handles incoming messages, checks for force-subscribe, and initiates song processing.
+    """
+    user_id = update.effective_user.id
+
+    # Ignore any messages not in the allowed group
+    if str(update.effective_chat.id) != config.ALLOWED_GROUP_ID:
+        return
+
+    # --- Force-subscribe check comes first ---
+    if config.FORCE_SUB_CHANNEL and not await is_user_subscribed(user_id, context):
+        # Store the user's original query
+        context.user_data['pending_query'] = update.message.text
+        keyboard = [
+            [InlineKeyboardButton("Subscribe to Channel", url=f"https://t.me/{config.FORCE_SUB_CHANNEL.replace('@', '')}")],
+            [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_subscription")]
+        ]
+        await update.message.reply_text(
+            "You must subscribe to our channel to request songs.\nPlease join and then click Refresh.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    # If subscribed, proceed to process the song request
+    status_message = await update.message.reply_text("Processing your request...")
+    await _initiate_song_processing(update, context, update.message.text, status_message)
+
 
 async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, message):
+    """
+    Acts as a dispatcher: adds the request to the queue if enabled,
+    otherwise executes it immediately.
+    """
+    if context.bot_data.get('queue_enabled', False):
+        queue_item = {
+            'update': update,
+            'context': context,
+            'query': query,
+            'message': message
+        }
+        await download_queue.put(queue_item)
+        await message.edit_text(f"Added to queue. There are {download_queue.qsize()} request(s) ahead of you.")
+    else:
+        await _execute_song_request(update, context, query, message)
+
+
+async def _execute_song_request(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, message):
+    """
+    Fetches song info and either sends it directly or provides a download link.
+    This is the core logic that is executed by the queue worker or directly.
+    """
     base_ydl_opts = {'format': 'bestaudio[ext=m4a]/bestaudio', 'noplaylist': True, 'default_search': 'ytsearch1'}
     ydl_opts = get_ydl_opts(base_ydl_opts)
     try:
@@ -424,17 +500,14 @@ async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYP
                 await message.edit_text("Sorry, I could not get a valid ID for the song.")
                 return
 
+            # The queue and force-subscribe checks are now handled before this function is called.
+            # This function's only job is to execute based on the upload mode.
             if context.bot_data.get('upload_mode') == 'direct':
-                if await is_user_subscribed(update.effective_user.id, context):
-                    if context.bot_data.get('queue_enabled'):
-                        await download_queue.put({'update': update, 'info': info, 'message': message})
-                        await message.edit_text(f"Added to queue. There are {download_queue.qsize()} song(s) ahead of you.")
-                    else:
-                        await download_and_send_song(update, context.application, info, message)
-                else:
-                    keyboard = [[InlineKeyboardButton("Subscribe to Channel", url=f"https://t.me/{config.FORCE_SUB_CHANNEL.replace('@', '')}")], [InlineKeyboardButton("Try Again", callback_data=f"checksub_{video_id}")]]
-                    await message.edit_text("You must subscribe to our channel to download songs directly.", reply_markup=InlineKeyboardMarkup(keyboard))
-            else:
+                # In direct mode, we proceed to download and send the song.
+                await download_and_send_song(update, context.application, info, message)
+            else: # Info mode
+                # In info mode, we only send the message with the 'Get Song' button.
+                # The actual download is handled by `send_song_in_pm`.
                 title, artist, album = info.get('title', 'Unknown Title'), info.get('uploader', 'Unknown Artist'), info.get('album', None)
                 caption = f"🎵 **{title}**\n👤 **{artist}**" + (f"\n💿 **{album}**" if album else "")
 
@@ -485,11 +558,8 @@ async def send_song_in_pm(update: Update, context: ContextTypes.DEFAULT_TYPE, vi
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_id, download=False)
 
-            if context.bot_data.get('queue_enabled'):
-                await download_queue.put({'update': update, 'info': info, 'message': message})
-                await message.edit_text(f"Added to queue. There are {download_queue.qsize()} song(s) ahead of you.")
-            else:
-                await download_and_send_song(update, context.application, info, message)
+            # Queue is only for group requests, so we download directly in PM.
+            await download_and_send_song(update, context.application, info, message)
         except Exception as e:
             logger.error(f"Error fetching info for PM song: {e}", exc_info=True)
             await message.edit_text("Sorry, the song request expired or failed.")
@@ -830,6 +900,7 @@ async def main() -> None:
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         application.add_handler(CallbackQueryHandler(checksub_callback_handler, pattern='^checksub_.*'))
         application.add_handler(CallbackQueryHandler(start_panel_callback_handler, pattern='^start_.*'))
+        application.add_handler(CallbackQueryHandler(refresh_subscription_handler, pattern='^refresh_subscription$'))
 
         # --- Schedule recurring jobs ---
 
