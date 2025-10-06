@@ -8,6 +8,7 @@ import spotipy
 import asyncio
 import db
 import admin_panel
+import start_panel
 import functools
 import datetime
 import time
@@ -152,7 +153,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             video_id = args[0].split("_", 2)[2]
             await send_song_in_pm(update, context, video_id)
         else:
-            await update.message.reply_text("Hi! I'm a music bot. Add me to the allowed group to start downloading music.")
+            text, keyboard = start_panel.get_start_panel()
+            await update.message.reply_text(text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
     else:
         if str(update.effective_chat.id) == config.ALLOWED_GROUP_ID:
             await update.message.reply_text("Hi! I'm ready to download music. Send me a song name or a link.")
@@ -212,7 +214,8 @@ async def admin_panel_actions(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update_and_show_panel(admin_panel.get_queue_panel)
     elif data == "admin_stats":
         user_count = await db.get_users_count()
-        await context.bot.answer_callback_query(query.id, text=f"📊 Total users in database: {user_count}", show_alert=True)
+        text, keyboard = admin_panel.get_stats_panel(user_count)
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
     elif data == "admin_close":
         await query.edit_message_text("Admin panel closed.")
         context.user_data.clear()
@@ -328,6 +331,29 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     context.user_data.clear()
     return ConversationHandler.END
+
+
+# --- Start Panel Callback ---
+async def start_panel_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles callbacks for the start panel."""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    # A helper function to avoid repeating code
+    async def update_and_show_panel(panel_function):
+        text, keyboard = panel_function()
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
+
+    if data == "start_home":
+        await update_and_show_panel(start_panel.get_start_panel)
+    elif data == "start_about":
+        await update_and_show_panel(start_panel.get_about_panel)
+    elif data == "start_help":
+        await update_and_show_panel(start_panel.get_help_panel)
+    elif data == "start_tos":
+        await update_and_show_panel(start_panel.get_tos_panel)
+
 
 # --- Song Handling Logic ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -786,7 +812,10 @@ async def main() -> None:
             entry_points=[CommandHandler("panel", panel_command)],
             states={
                 SELECTING_ACTION: [CallbackQueryHandler(admin_panel_actions)],
-                SETTING_DELAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_delay_handler)],
+                SETTING_DELAY: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, set_delay_handler),
+                    CallbackQueryHandler(admin_panel_actions, pattern='^admin_back_to_main$')
+                ],
                 BROADCASTING_MESSAGE: [MessageHandler(filters.ALL & ~filters.COMMAND, broadcast_message_handler)],
                 BROADCASTING_CONFIRM: [CallbackQueryHandler(broadcast_confirmation_handler)],
             },
@@ -800,6 +829,7 @@ async def main() -> None:
         application.add_handler(admin_conv_handler)
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         application.add_handler(CallbackQueryHandler(checksub_callback_handler, pattern='^checksub_.*'))
+        application.add_handler(CallbackQueryHandler(start_panel_callback_handler, pattern='^start_.*'))
 
         # --- Schedule recurring jobs ---
 

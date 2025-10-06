@@ -39,6 +39,18 @@ def get_upload_mode_panel(context):
     ]
     return text, InlineKeyboardMarkup(keyboard)
 
+# --- Stats Panel ---
+def get_stats_panel(user_count):
+    """Generates the stats panel."""
+    text = (
+        f"📊 *Bot Statistics*\n\n"
+        f"Total users in database: *{user_count}*"
+    )
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Back", callback_data="admin_back_to_main")]
+    ]
+    return text, InlineKeyboardMarkup(keyboard)
+
 # --- Queue System Panel ---
 def get_queue_panel(context):
     """Generates the queue system settings panel."""
