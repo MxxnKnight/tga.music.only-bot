@@ -12,8 +12,8 @@ databases:
 
 services:
   # 2. Telegram Bot Service
-  # This service runs the bot as a background worker using the existing Dockerfile.
-  - type: worker
+  # This service runs the bot as a web service to comply with Render's free tier.
+  - type: web
     name: telegram-music-bot
     # The 'plan' can be 'free' for testing or a paid plan for production.
     plan: free

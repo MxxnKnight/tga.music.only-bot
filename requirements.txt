@@ -2,3 +2,4 @@ python-telegram-bot[job-queue]
 yt-dlp
 spotipy
 motor
+Flask

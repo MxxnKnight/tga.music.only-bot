@@ -11,8 +11,10 @@ import admin_panel
 import functools
 import datetime
 import time
+import threading
 from datetime import timedelta
 from spotipy.oauth2 import SpotifyClientCredentials
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatMemberStatus
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
@@ -20,6 +22,14 @@ from telegram.error import TimedOut, BadRequest, RetryAfter
 
 # --- Global Variables ---
 last_update_time = 0
+
+# --- Flask App for Health Check ---
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def health_check():
+    """A simple health check endpoint for Render."""
+    return "Bot is running!", 200
 
 # Enable logging
 logging.basicConfig(
@@ -727,9 +737,20 @@ async def download_and_send_song(update: Update, application: Application, info:
         await loop.run_in_executor(None, cleanup_task)
 
 
+def run_flask_app():
+    """Runs the Flask app in a separate thread."""
+    port = int(os.environ.get('PORT', 8080))
+    flask_app.run(host='0.0.0.0', port=port)
+
 async def main() -> None:
     """Initializes, configures, and runs the bot."""
     logger.info("Starting bot initialization...")
+
+    # --- Run Flask app in a background thread ---
+    flask_thread = threading.Thread(target=run_flask_app)
+    flask_thread.daemon = True
+    flask_thread.start()
+    logger.info("Flask health check server running in a background thread.")
 
     # --- Cookie File Check ---
     if os.path.exists(COOKIE_FILE):
