@@ -36,7 +36,7 @@ def get_about_panel():
         "✨ **About This Bot**\n\n"
         "This bot was created to make downloading your favorite music easy and fast.\n\n"
         "- **Hosted on:** Render\n"
-        "- **Admins:** @Mxxn_Knight & @Charliecharlieodiyan\n"
+        "- **Owners:** [@Mxxn_Knight](tg://resolve?domain=Mxxn_Knight) & [@Charliecharlieodiyan](tg://resolve?domain=Charliecharlieodiyan)\n"
         "- **Language:** Python\n"
         "- **Library:** `python-telegram-bot`"
     )
