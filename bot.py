@@ -80,11 +80,11 @@ async def queue_worker(application: Application):
     while True:
         try:
             item = await download_queue.get()
-            update, context, query, message = item['update'], item['context'], item['query'], item['message']
+            update, context, query, message, original_message_id = item['update'], item['context'], item['query'], item['message'], item['original_message_id']
 
             try:
                 # The worker now executes the full song processing logic for a queued request
-                await _execute_song_request(update, context, query, message)
+                await _execute_song_request(update, context, query, message, original_message_id=original_message_id)
             except Exception as e:
                 logger.error(f"Error processing item from queue: {e}", exc_info=True)
                 try:
@@ -369,14 +369,16 @@ async def refresh_subscription_handler(update: Update, context: ContextTypes.DEF
         await query.message.delete()
 
         pending_query = context.user_data.pop('pending_query', None)
+        original_message_id = context.user_data.pop('pending_message_id', None)
         if pending_query:
-            # Re-initiate the song request process
+            # Re-initiate the song request process, replying to the original message
             status_message = await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=f"Processing your request for: `{pending_query}`",
-                parse_mode=ParseMode.MARKDOWN
+                parse_mode=ParseMode.MARKDOWN,
+                reply_to_message_id=original_message_id
             )
-            await _initiate_song_processing(update, context, pending_query, status_message)
+            await _initiate_song_processing(update, context, pending_query, status_message, original_message_id=original_message_id)
         else:
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
@@ -387,7 +389,7 @@ async def refresh_subscription_handler(update: Update, context: ContextTypes.DEF
 
 
 # --- Song Handling Logic ---
-async def _initiate_song_processing(update: Update, context: ContextTypes.DEFAULT_TYPE, query_text: str, status_message):
+async def _initiate_song_processing(update: Update, context: ContextTypes.DEFAULT_TYPE, query_text: str, status_message, original_message_id: int = None):
     """
     Handles the core logic of processing a song query, including link parsing.
     This function can be called from different handlers.
@@ -417,7 +419,7 @@ async def _initiate_song_processing(update: Update, context: ContextTypes.DEFAUL
                 await status_message.edit_text("Could not extract info from Saavn link.")
                 return
     
-    await process_song_request(update, context, query, status_message)
+    await process_song_request(update, context, query, status_message, original_message_id=original_message_id)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -432,24 +434,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # --- Force-subscribe check comes first ---
     if config.FORCE_SUB_CHANNEL and not await is_user_subscribed(user_id, context):
-        # Store the user's original query
+        # Store the user's original query and message ID
         context.user_data['pending_query'] = update.message.text
+        context.user_data['pending_message_id'] = update.message.message_id
         keyboard = [
             [InlineKeyboardButton("Subscribe to Channel", url=f"https://t.me/{config.FORCE_SUB_CHANNEL.replace('@', '')}")],
             [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_subscription")]
         ]
         await update.message.reply_text(
             "You must subscribe to our channel to request songs.\nPlease join and then click Refresh.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            reply_to_message_id=update.message.message_id
         )
         return
 
     # If subscribed, proceed to process the song request
-    status_message = await update.message.reply_text("Processing your request...")
-    await _initiate_song_processing(update, context, update.message.text, status_message)
+    status_message = await update.message.reply_text(
+        "Processing your request...",
+        reply_to_message_id=update.message.message_id
+    )
+    await _initiate_song_processing(update, context, update.message.text, status_message, original_message_id=update.message.message_id)
 
 
-async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, message):
+async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, message, original_message_id: int = None):
     """
     Acts as a dispatcher: adds the request to the queue if enabled,
     otherwise executes it immediately.
@@ -459,15 +466,16 @@ async def process_song_request(update: Update, context: ContextTypes.DEFAULT_TYP
             'update': update,
             'context': context,
             'query': query,
-            'message': message
+            'message': message,
+            'original_message_id': original_message_id
         }
         await download_queue.put(queue_item)
         await message.edit_text(f"Added to queue. There are {download_queue.qsize()} request(s) ahead of you.")
     else:
-        await _execute_song_request(update, context, query, message)
+        await _execute_song_request(update, context, query, message, original_message_id=original_message_id)
 
 
-async def _execute_song_request(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, message):
+async def _execute_song_request(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, message, original_message_id: int = None):
     """
     Fetches song info and either sends it directly or provides a download link.
     This is the core logic that is executed by the queue worker or directly.
@@ -504,7 +512,7 @@ async def _execute_song_request(update: Update, context: ContextTypes.DEFAULT_TY
             # This function's only job is to execute based on the upload mode.
             if context.bot_data.get('upload_mode') == 'direct':
                 # In direct mode, we proceed to download and send the song.
-                await download_and_send_song(update, context.application, info, message)
+                await download_and_send_song(update, context.application, info, message, original_message_id=original_message_id)
             else: # Info mode
                 # In info mode, we only send the message with the 'Get Song' button.
                 # The actual download is handled by `send_song_in_pm`.
@@ -632,7 +640,7 @@ def _blocking_cleanup(paths_to_clean):
             logger.error(f"Error during cleanup of {path}: {e}")
 
 
-async def download_and_send_song(update: Update, application: Application, info: dict, message):
+async def download_and_send_song(update: Update, application: Application, info: dict, message, original_message_id: int = None):
     loop = asyncio.get_running_loop()
     chat_id = message.chat_id
     video_id = info.get('id')
@@ -660,6 +668,7 @@ async def download_and_send_song(update: Update, application: Application, info:
                     performer=artist,
                     duration=duration,
                     parse_mode=ParseMode.MARKDOWN,
+                    reply_to_message_id=original_message_id
                 )
 
                 if delay > 0:
@@ -782,7 +791,8 @@ async def download_and_send_song(update: Update, application: Application, info:
                 performer=artist,
                 duration=duration,
                 parse_mode=ParseMode.MARKDOWN,
-                thumbnail=thumbnail_bytes
+                thumbnail=thumbnail_bytes,
+                reply_to_message_id=original_message_id
             )
             # Add the file_id to the cache for future use
             await db.add_to_cache(video_id=info['id'], file_id=sent_message.audio.file_id)
