@@ -7,7 +7,8 @@ import config
 about_button = InlineKeyboardButton("✨ About", callback_data="start_about")
 help_button = InlineKeyboardButton("❓ Help", callback_data="start_help")
 tos_button = InlineKeyboardButton("📜 Terms of Service", callback_data="start_tos")
-group_button = InlineKeyboardButton("👥 Join Group", url=f"https://t.me/{config.ALLOWED_GROUP_ID.replace('@', '')}")
+music_group_button = InlineKeyboardButton("🎵 Music Group", url="https://t.me/pattupetttti")
+chat_group_button = InlineKeyboardButton("💬 Chat Group", url="https://t.me/Chatpettti")
 back_button = InlineKeyboardButton("⬅️ Back to Home", callback_data="start_home")
 
 
@@ -17,12 +18,14 @@ def get_start_panel():
     welcome_text = (
         "👋 **Welcome to the Music Downloader Bot!**\n\n"
         "This bot can help you download songs from various sources.\n\n"
-        "Use the buttons below to learn more or join our group to start downloading."
+        "Use the buttons below to learn more or join our groups."
     )
-    # Home panel shows all main options
+    # Home panel shows all main options in the new layout
     keyboard = [
         [about_button, help_button],
-        [tos_button, group_button]
+        [tos_button],
+        [music_group_button],
+        [chat_group_button]
     ]
     return welcome_text, InlineKeyboardMarkup(keyboard)
 
@@ -33,7 +36,7 @@ def get_about_panel():
         "✨ **About This Bot**\n\n"
         "This bot was created to make downloading your favorite music easy and fast.\n\n"
         "- **Hosted on:** Render\n"
-        f"- **Owner:** {config.OWNER_NAME}\n"
+        "- **Admins:** @Mxxn_Knight & @Charliecharlieodiyan\n"
         "- **Language:** Python\n"
         "- **Library:** `python-telegram-bot`"
     )
