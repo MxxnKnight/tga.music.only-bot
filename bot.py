@@ -2,6 +2,7 @@
 import logging
 import config
 import os
+import shutil
 import re
 import yt_dlp
 import spotipy
@@ -622,22 +623,18 @@ def _blocking_download_and_process(ydl_opts, info, download_path, base_filename)
 
     return downloaded_file, thumbnail_path, thumbnail_bytes, audio_bytes
 
-def _blocking_cleanup(paths_to_clean):
+def _blocking_cleanup(path_to_clean):
     """
-    Handles the blocking I/O task of cleaning up files.
+    Handles the blocking I/O task of cleaning up a directory recursively.
     This function is designed to be run in a separate thread.
     """
-    for path in paths_to_clean:
-        if not path or not os.path.exists(path):
-            continue
-        try:
-            if os.path.isfile(path):
-                os.remove(path)
-            elif os.path.isdir(path):
-                if not os.listdir(path):
-                    os.rmdir(path)
-        except Exception as e:
-            logger.error(f"Error during cleanup of {path}: {e}")
+    if not path_to_clean or not os.path.exists(path_to_clean):
+        return
+    try:
+        shutil.rmtree(path_to_clean)
+        logger.info(f"Successfully cleaned up directory: {path_to_clean}")
+    except Exception as e:
+        logger.error(f"Error during cleanup of {path_to_clean}: {e}")
 
 
 async def download_and_send_song(update: Update, application: Application, info: dict, message, original_message_id: int = None):
@@ -838,8 +835,8 @@ async def download_and_send_song(update: Update, application: Application, info:
             except:
                 pass
     finally:
-        paths_to_clean = [downloaded_file, thumbnail_path, download_path]
-        cleanup_task = functools.partial(_blocking_cleanup, paths_to_clean)
+        # The cleanup function now handles the entire directory.
+        cleanup_task = functools.partial(_blocking_cleanup, download_path)
         await loop.run_in_executor(None, cleanup_task)
 
 
