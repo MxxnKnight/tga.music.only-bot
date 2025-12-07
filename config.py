@@ -19,7 +19,8 @@ BOT_USERNAME = os.getenv("BOT_USERNAME") # Without @
 COOKIE_FILE_PATH = os.getenv("COOKIE_FILE_PATH") # Optional: Path to a cookies.txt file
 
 # Webhook Configuration
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+# On Render, RENDER_EXTERNAL_URL is automatically set to the public URL.
+WEBHOOK_URL = os.getenv("WEBHOOK_URL") or os.getenv("RENDER_EXTERNAL_URL")
 PORT = int(os.getenv("PORT", 8080))
 
 # --- Bot Settings (with safe defaults) ---
