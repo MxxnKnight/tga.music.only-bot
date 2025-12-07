@@ -842,18 +842,16 @@ async def download_and_send_song(update: Update, application: Application, info:
 
 def run_flask_app():
     """Runs the Flask app in a separate thread."""
+    # This is kept for backward compatibility if we are not in webhook mode,
+    # or to be removed if we switch completely.
+    # However, if we use aiohttp for webhook, we don't need Flask.
+    # But if we use polling, we still need Flask for health checks on Render.
     port = int(os.environ.get('PORT', 8080))
     flask_app.run(host='0.0.0.0', port=port)
 
 async def main() -> None:
     """Initializes, configures, and runs the bot."""
     logger.info("Starting bot initialization...")
-
-    # --- Run Flask app in a background thread ---
-    flask_thread = threading.Thread(target=run_flask_app)
-    flask_thread.daemon = True
-    flask_thread.start()
-    logger.info("Flask health check server running in a background thread.")
 
     # --- Cookie File Check ---
     if os.path.exists(COOKIE_FILE):
@@ -863,7 +861,6 @@ async def main() -> None:
 
     # --- Initialization ---
     await db.initialize_db()
-
 
     try:
         loaded_settings = await db.load_all_settings()
@@ -909,16 +906,60 @@ async def main() -> None:
         application.add_handler(CallbackQueryHandler(start_panel_callback_handler, pattern='^start_.*'))
         application.add_handler(CallbackQueryHandler(refresh_subscription_handler, pattern='^refresh_subscription$'))
 
-        # --- Schedule recurring jobs ---
 
-        # --- Run the Bot ---
-        logger.info("Starting bot polling...")
-        await application.initialize()
-        await application.start()
-        await application.updater.start_polling(drop_pending_updates=True)
+        # --- Webhook vs Polling Logic ---
+        if config.WEBHOOK_URL:
+            logger.info(f"Starting bot in WEBHOOK mode. URL: {config.WEBHOOK_URL}, Port: {config.PORT}")
 
-        # Keep the bot running
-        await asyncio.Event().wait()
+            # Using aiohttp which comes with python-telegram-bot or we added it
+            from aiohttp import web
+
+            async def health_check_handler(request):
+                return web.Response(text="Bot is running!", status=200)
+
+            await application.initialize()
+            await application.start()
+
+            # Set up the webhook with Telegram
+            await application.bot.set_webhook(url=f"{config.WEBHOOK_URL}/telegram")
+
+            async def telegram_webhook_handler(request):
+                try:
+                    json_data = await request.json()
+                    update = Update.de_json(json_data, application.bot)
+                    await application.process_update(update)
+                    return web.Response(status=200)
+                except Exception as e:
+                    logger.error(f"Error in webhook handler: {e}")
+                    return web.Response(status=500)
+
+            app = web.Application()
+            app.router.add_get('/', health_check_handler)
+            app.router.add_post('/telegram', telegram_webhook_handler)
+
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, '0.0.0.0', config.PORT)
+            await site.start()
+
+            # Keep running
+            await asyncio.Event().wait()
+
+        else:
+            logger.info("Starting bot in POLLING mode...")
+
+            # --- Run Flask app in a background thread ONLY for polling mode ---
+            flask_thread = threading.Thread(target=run_flask_app)
+            flask_thread.daemon = True
+            flask_thread.start()
+            logger.info("Flask health check server running in a background thread.")
+
+            await application.initialize()
+            await application.start()
+            await application.updater.start_polling(drop_pending_updates=True)
+
+            # Keep the bot running
+            await asyncio.Event().wait()
 
     except (KeyboardInterrupt, SystemExit):
         logger.info("Received stop signal")

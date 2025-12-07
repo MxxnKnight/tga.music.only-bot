@@ -3,3 +3,4 @@ yt-dlp
 spotipy
 motor
 Flask
+aiohttp
